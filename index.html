@@ -14,8 +14,21 @@
           <button id="tab-maze" class="tab">Maze Generator</button>
         </div>
         <div id="file-buttons">
-          <button id="btn-save" title="Save Level">Save</button>
-          <button id="btn-load" title="Load Level">Load</button>
+          <div class="save-dropdown">
+            <button id="btn-save" title="Save Level">Save ▾</button>
+            <div class="save-menu" id="save-menu">
+              <button data-format="glvl">Save as .glvl</button>
+              <button data-format="glb">Save as .glb</button>
+            </div>
+          </div>
+          <div class="load-dropdown">
+            <button id="btn-load" title="Load Level">Load ▾</button>
+            <div class="load-menu" id="load-menu">
+              <button data-load="file">From file...</button>
+              <button data-load="url" data-url="/glb/box.glb">box.glb</button>
+              <button data-load="url" data-url="/glb/cone.glb">cone.glb</button>
+            </div>
+          </div>
         </div>
       </div>
       <div id="viewport"></div>
@@ -27,6 +40,10 @@
               Brush Tools
             </button>
             <div class="panel-content" id="panel-brush-tools">
+              <div class="control-row">
+                <label for="texture-select">Texture</label>
+                <select id="texture-select"></select>
+              </div>
               <div class="add-brushes">
                 <button id="btn-add-box" title="Add Box Brush">Add Box</button>
                 <button id="btn-add-cylinder" title="Add Cylinder Brush">Add Cylinder</button>

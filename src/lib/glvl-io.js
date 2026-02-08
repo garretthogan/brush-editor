@@ -63,6 +63,33 @@ export async function saveGlvl(data, options = {}) {
 }
 
 /**
+ * Load data from an encrypted .glvl file given a File object.
+ * @param {File} file - The .glvl file to decrypt
+ * @param {object} [options]
+ * @param {Uint8Array} [options.key] - 32-byte key (uses default if omitted)
+ * @returns {Promise<object|null>} Parsed data, or null if failed
+ */
+export async function loadGlvlFromFile(file, options = {}) {
+  const { key: keyBytes } = options
+  try {
+    const buffer = await file.arrayBuffer()
+    const iv = buffer.slice(0, 12)
+    const ciphertext = buffer.slice(12)
+    const key = await getKey(keyBytes)
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv },
+      key,
+      ciphertext
+    )
+    const json = new TextDecoder().decode(decrypted)
+    return JSON.parse(json)
+  } catch (err) {
+    console.error('Failed to load .glvl file:', err)
+    return null
+  }
+}
+
+/**
  * Load data from an encrypted .glvl file (opens file picker).
  * @param {object} [options]
  * @param {string} [options.accept='.glvl']
@@ -87,17 +114,8 @@ export function loadGlvl(options = {}) {
       }
 
       try {
-        const buffer = await file.arrayBuffer()
-        const iv = buffer.slice(0, 12)
-        const ciphertext = buffer.slice(12)
-        const key = await getKey(keyBytes)
-        const decrypted = await crypto.subtle.decrypt(
-          { name: 'AES-GCM', iv },
-          key,
-          ciphertext
-        )
-        const json = new TextDecoder().decode(decrypted)
-        resolve(JSON.parse(json))
+        const data = await loadGlvlFromFile(file, { key: keyBytes })
+        resolve(data)
       } catch (err) {
         console.error('Failed to load .glvl file:', err)
         resolve(null)

@@ -2,16 +2,45 @@ import './style.css'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
-import { saveGlvl, loadGlvl } from './lib/glvl-io.js'
+import { saveGlvl, loadGlvlFromFile } from './lib/glvl-io.js'
+import { saveGlb, loadGlbFromFile, loadGlbFromUrl } from './lib/glb-io.js'
 import { generateMaze as generateMazeGrid } from './lib/maze-generator.js'
 import { createInputHandler } from './lib/input-commands.js'
 
 const GRID_COLOR = 0x333333
 const OUTLINE_COLOR = 0xff8800
 
+// Only textures at palette root (excludes Fixtures). Format: { palette, file }
+const TEXTURE_POOL = [
+  { palette: 'Dark', file: 'texture_01.png' },
+  { palette: 'Dark', file: 'texture_13.png' },
+  { palette: 'Green', file: 'texture_02.png' },
+  { palette: 'Light', file: 'texture_02.png' },
+  { palette: 'Orange', file: 'texture_02.png' },
+  { palette: 'Purple', file: 'texture_02.png' },
+  { palette: 'Red', file: 'texture_02.png' },
+]
+
 const textureLoader = new THREE.TextureLoader()
-const defaultTexture = textureLoader.load(`${import.meta.env.BASE_URL}textures/Dark/texture_05.png`)
-defaultTexture.wrapS = defaultTexture.wrapT = THREE.RepeatWrapping
+const baseUrl = import.meta.env.BASE_URL
+
+function getTextureUrl(index) {
+  const { palette, file } = TEXTURE_POOL[index]
+  return `${baseUrl}textures/${palette}/${file}`
+}
+
+function loadTextureForSpawn() {
+  const select = document.getElementById('texture-select')
+  const value = select?.value
+  const index = value === 'random' || value === ''
+    ? Math.floor(Math.random() * TEXTURE_POOL.length)
+    : Math.max(0, Math.min(parseInt(value, 10) || 0, TEXTURE_POOL.length - 1))
+  const url = getTextureUrl(index)
+  const tex = textureLoader.load(url)
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
 
 // --- Scene Setup ---
 const viewport = document.getElementById('viewport')
@@ -25,6 +54,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true })
 renderer.setPixelRatio(window.devicePixelRatio)
 renderer.setSize(viewport.clientWidth, viewport.clientHeight)
 renderer.shadowMap.enabled = false
+renderer.outputColorSpace = THREE.SRGBColorSpace
 viewport.appendChild(renderer.domElement)
 
 // Lighting
@@ -125,8 +155,7 @@ function setBoxUVs(geometry, sx, sy, sz) {
 function createBrushMesh(size = [2, 2, 2], position = [0, 1, 0], depthBias = 0) {
   const geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
   setBoxUVs(geometry, size[0], size[1], size[2])
-  const texture = defaultTexture.clone()
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping
+  const texture = loadTextureForSpawn()
   const material = new THREE.MeshStandardMaterial({
     map: texture,
     flatShading: false,
@@ -147,8 +176,7 @@ function createBrushMesh(size = [2, 2, 2], position = [0, 1, 0], depthBias = 0) 
 function createCylinderMesh(radius = 1, height = 2, position = [0, 1, 0], depthBias = 0) {
   const geometry = new THREE.CylinderGeometry(radius, radius, height, 16, 1)
   setCylinderUVs(geometry, radius, height, 16, 1)
-  const texture = defaultTexture.clone()
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping
+  const texture = loadTextureForSpawn()
   const material = new THREE.MeshStandardMaterial({
     map: texture,
     flatShading: false,
@@ -298,6 +326,7 @@ function addOutline(mesh) {
   })
   const outline = new THREE.Mesh(outlineGeom, outlineMat)
   outline.scale.setScalar(1.02)
+  outline.userData.isOutline = true
   mesh.add(outline)
   mesh.userData.outline = outline
 }
@@ -329,10 +358,17 @@ function cloneBrush(mesh) {
   let clone
   if (mesh.userData.type === 'cylinder') {
     clone = createCylinderMesh(mesh.userData.radius, mesh.userData.height, position, brushes.length * 4)
+  } else if (mesh.userData.type === 'imported') {
+    clone = mesh.clone()
+    clone.geometry = mesh.geometry.clone()
+    clone.material = mesh.material.clone()
+    if (clone.material.map) clone.material.map = clone.material.map.clone()
+    clone.userData = { ...mesh.userData, id: crypto.randomUUID(), outline: null }
+    clone.scale.copy(mesh.scale)
   } else {
     clone = createBrushMesh([...mesh.userData.size], position, brushes.length * 4)
   }
-  clone.userData.id = crypto.randomUUID()
+  clone.userData.id = clone.userData.id ?? crypto.randomUUID()
   clone.userData.isUserBrush = true
   clone.position.fromArray(position)
   clone.rotation.fromArray(rotation)
@@ -387,7 +423,14 @@ function bakeScaleIntoGeometry(mesh) {
   const s = mesh.scale
   const outline = mesh.userData.outline
 
-  if (mesh.userData.type === 'cylinder') {
+  if (mesh.userData.type === 'imported') {
+    mesh.geometry.scale(s.x, s.y, s.z)
+    mesh.scale.set(1, 1, 1)
+    if (outline) {
+      outline.geometry.dispose()
+      outline.geometry = mesh.geometry.clone()
+    }
+  } else if (mesh.userData.type === 'cylinder') {
     const r = mesh.userData.radius
     const h = mesh.userData.height
     mesh.userData.radius = r * Math.max(s.x, s.z)
@@ -425,7 +468,9 @@ function bakeScaleIntoGeometry(mesh) {
 function serializeLevel() {
   return {
     version: 1,
-    brushes: brushes.map((m) => {
+    brushes: brushes
+      .filter((m) => m.userData.type !== 'imported')
+      .map((m) => {
       const base = {
         id: m.userData.id,
         type: m.userData.type || 'box',
@@ -470,16 +515,64 @@ function deserializeLevel(data) {
   selectBrush(null)
 }
 
-async function saveLevel() {
-  await saveGlvl(serializeLevel(), { filename: 'level.glvl' })
+async function saveLevel(format) {
+  if (format === 'glb') {
+    await saveGlb(brushes, { filename: 'level.glb' })
+  } else {
+    await saveGlvl(serializeLevel(), { filename: 'level.glvl' })
+  }
 }
 
-async function loadLevel() {
-  const data = await loadGlvl({ accept: '.glvl' })
-  if (data) {
-    pushUndoState()
-    deserializeLevel(data)
-  }
+function addImportedMeshes(meshes) {
+  if (!meshes || meshes.length === 0) return
+  pushUndoState()
+  meshes.forEach((mesh) => {
+    const tex = loadTextureForSpawn()
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    materials.forEach((mat) => {
+      if (mat && mat.map !== undefined) mat.map = tex
+    })
+    mesh.userData.isBrush = true
+    mesh.userData.type = 'imported'
+    mesh.userData.id = crypto.randomUUID()
+    mesh.userData.isUserBrush = true
+    mesh.castShadow = false
+    mesh.receiveShadow = false
+    scene.add(mesh)
+    brushes.push(mesh)
+  })
+  selectBrush(null)
+}
+
+function loadLevelFromFile() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.glvl,.gltf,.glb'
+  input.style.display = 'none'
+  input.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || [])
+    document.body.removeChild(input)
+    if (files.length === 0) return
+    const first = files[0]
+    const ext = first.name.split('.').pop()?.toLowerCase()
+    if (ext === 'glvl') {
+      const data = await loadGlvlFromFile(first)
+      if (data) {
+        pushUndoState()
+        deserializeLevel(data)
+      }
+    } else if (ext === 'glb' || ext === 'gltf') {
+      const meshes = await loadGlbFromFile(first)
+      addImportedMeshes(meshes)
+    }
+  })
+  document.body.appendChild(input)
+  input.click()
+}
+
+async function loadLevelFromUrl(url) {
+  const meshes = await loadGlbFromUrl(url)
+  addImportedMeshes(meshes)
 }
 
 // --- Mode tabs ---
@@ -559,6 +652,19 @@ const inputHandler = createInputHandler({
   pickBrush,
 })
 
+// --- Texture dropdown ---
+const textureSelect = document.getElementById('texture-select')
+const randomOpt = document.createElement('option')
+randomOpt.value = 'random'
+randomOpt.textContent = 'Random'
+textureSelect.appendChild(randomOpt)
+TEXTURE_POOL.forEach(({ palette, file }, i) => {
+  const opt = document.createElement('option')
+  opt.value = String(i)
+  opt.textContent = `${palette} / ${file.replace('.png', '')}`
+  textureSelect.appendChild(opt)
+})
+
 // --- Toolbar ---
 document.getElementById('btn-add-box').addEventListener('click', addBoxBrush)
 document.getElementById('btn-add-cylinder').addEventListener('click', addCylinderBrush)
@@ -567,8 +673,38 @@ document.getElementById('btn-rotate').addEventListener('click', () => inputHandl
 document.getElementById('btn-scale').addEventListener('click', () => inputHandler.setTransformMode('scale'))
 document.getElementById('btn-delete').addEventListener('click', () => inputHandler.deleteSelected())
 document.getElementById('btn-generate-maze').addEventListener('click', generateMaze)
-document.getElementById('btn-save').addEventListener('click', saveLevel)
-document.getElementById('btn-load').addEventListener('click', loadLevel)
+// Save dropdown
+const saveMenu = document.getElementById('save-menu')
+document.getElementById('btn-save').addEventListener('click', (e) => {
+  e.stopPropagation()
+  saveMenu.classList.toggle('open')
+})
+document.querySelectorAll('.save-menu button').forEach((btn) => {
+  btn.addEventListener('click', (e) => {
+    saveLevel(e.target.dataset.format)
+    saveMenu.classList.remove('open')
+  })
+})
+document.addEventListener('click', () => saveMenu.classList.remove('open'))
+
+// Load dropdown
+const loadMenu = document.getElementById('load-menu')
+document.getElementById('btn-load').addEventListener('click', (e) => {
+  e.stopPropagation()
+  loadMenu.classList.toggle('open')
+})
+document.querySelectorAll('.load-menu button').forEach((btn) => {
+  btn.addEventListener('click', (e) => {
+    const load = e.target.dataset.load
+    if (load === 'file') {
+      loadLevelFromFile()
+    } else if (load === 'url' && e.target.dataset.url) {
+      loadLevelFromUrl(e.target.dataset.url)
+    }
+    loadMenu.classList.remove('open')
+  })
+})
+document.addEventListener('click', () => loadMenu.classList.remove('open'))
 
 // --- Resize ---
 const resizeObserver = new ResizeObserver(() => {

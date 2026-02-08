@@ -79,18 +79,37 @@ class UndoCommand extends Command {
 }
 
 /**
- * Captures modifier state at pointerdown for clone-on-drag. Cmd (Mac) or Alt (Windows).
- * Uses pointerdown rather than keydown/keyup because keyup can fail to fire when
- * the canvas has pointer capture during a drag.
+ * Captures modifier state for clone-on-drag. Cmd (Mac) or Alt (Windows).
+ * Uses pointerdown on the viewport (capture phase) plus keydown/keyup as fallback,
+ * since pointer events can be affected by transform control pointer capture.
  */
 function createCloneModifierCapturer(viewport) {
-  let cloneModifierHeld = false
+  let pointerdownModifier = false
+  let keyModifier = false
 
-  viewport.addEventListener('pointerdown', (e) => {
-    cloneModifierHeld = e.metaKey || e.altKey
+  document.addEventListener('pointerdown', (e) => {
+    if (viewport.contains(e.target)) {
+      pointerdownModifier = e.metaKey || e.altKey
+    }
+  }, true)
+
+  document.addEventListener('pointerup', () => {
+    pointerdownModifier = false
+  }, true)
+
+  document.addEventListener('pointercancel', () => {
+    pointerdownModifier = false
+  }, true)
+
+  document.addEventListener('keydown', (e) => {
+    if (e.metaKey || e.altKey) keyModifier = true
   })
 
-  return () => cloneModifierHeld
+  document.addEventListener('keyup', (e) => {
+    if (e.key === 'Meta' || e.key === 'Alt') keyModifier = false
+  })
+
+  return () => pointerdownModifier || keyModifier
 }
 
 /**
