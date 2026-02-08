@@ -163,6 +163,7 @@ body {
   top: 48px;
   left: 12px;
   z-index: 10;
+  max-width: min(300px, calc(100vw - 2rem));
   padding: 0.5rem 0.75rem;
   background: rgba(22, 22, 22, 0.95);
   border: 1px solid #2a2a2a;
@@ -243,7 +244,8 @@ body {
   flex-shrink: 0;
 }
 
-#panel-maze-settings {
+#panel-maze-settings,
+#panel-skybox-settings {
   flex-direction: column;
 }
 
@@ -284,6 +286,16 @@ body {
 .control-row input[type="range"] {
   flex: 1;
   max-width: 160px;
+}
+
+.control-row input[type="color"] {
+  width: 2.5rem;
+  height: 1.75rem;
+  padding: 2px;
+  cursor: pointer;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  background: #2a2a2a;
 }
 
 .control-row select {

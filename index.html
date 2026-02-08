@@ -12,23 +12,11 @@
         <div id="mode-tabs">
           <button id="tab-brush" class="tab active">Brush Editor</button>
           <button id="tab-maze" class="tab">Maze Generator</button>
+          <button id="tab-skybox" class="tab">Skybox Editor</button>
         </div>
         <div id="file-buttons">
-          <div class="save-dropdown">
-            <button id="btn-save" title="Save Level">Save ▾</button>
-            <div class="save-menu" id="save-menu">
-              <button data-format="glvl">Save as .glvl</button>
-              <button data-format="glb">Save as .glb</button>
-            </div>
-          </div>
-          <div class="load-dropdown">
-            <button id="btn-load" title="Load Level">Load ▾</button>
-            <div class="load-menu" id="load-menu">
-              <button data-load="file">From file...</button>
-              <button data-load="url" data-url="/glb/box.glb">box.glb</button>
-              <button data-load="url" data-url="/glb/cone.glb">cone.glb</button>
-            </div>
-          </div>
+          <button id="btn-save" title="Save Level">Save</button>
+          <button id="btn-load" title="Load Level / Import GLB">Load</button>
         </div>
       </div>
       <div id="viewport"></div>
@@ -106,6 +94,61 @@
                   <input type="checkbox" id="maze-start-from-center" checked />
                   Start from center
                 </label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="skybox-controls" class="mode-panel hidden">
+          <div class="panel collapsible">
+            <button class="panel-header" data-panel="skybox-settings">
+              <span class="panel-chevron">▼</span>
+              Sky &amp; Sun
+            </button>
+            <div class="panel-content" id="panel-skybox-settings">
+              <div class="control-row">
+                <label for="sky-turbidity">Turbidity</label>
+                <input type="range" id="sky-turbidity" min="0" max="20" step="0.1" value="10" />
+                <span id="sky-turbidity-value">10</span>
+              </div>
+              <div class="control-row">
+                <label for="sky-rayleigh">Rayleigh</label>
+                <input type="range" id="sky-rayleigh" min="0" max="4" step="0.001" value="3" />
+                <span id="sky-rayleigh-value">3</span>
+              </div>
+              <div class="control-row">
+                <label for="sky-mie">Mie coefficient</label>
+                <input type="range" id="sky-mie" min="0" max="0.1" step="0.001" value="0.005" />
+                <span id="sky-mie-value">0.005</span>
+              </div>
+              <div class="control-row">
+                <label for="sky-mie-g">Mie directional G</label>
+                <input type="range" id="sky-mie-g" min="0" max="1" step="0.001" value="0.7" />
+                <span id="sky-mie-g-value">0.7</span>
+              </div>
+              <div class="control-row">
+                <label for="sky-elevation">Sun elevation (°)</label>
+                <input type="range" id="sky-elevation" min="0" max="90" step="0.1" value="2" />
+                <span id="sky-elevation-value">2</span>
+              </div>
+              <div class="control-row">
+                <label for="sky-azimuth">Sun azimuth (°)</label>
+                <input type="range" id="sky-azimuth" min="-180" max="180" step="0.1" value="180" />
+                <span id="sky-azimuth-value">180</span>
+              </div>
+              <div class="control-row">
+                <label for="sky-exposure">Exposure</label>
+                <input type="range" id="sky-exposure" min="0" max="1" step="0.0001" value="0.5" />
+                <span id="sky-exposure-value">0.5</span>
+              </div>
+              <div class="tool-divider" role="separator"></div>
+              <div class="control-row">
+                <label for="sun-intensity">Sun intensity</label>
+                <input type="range" id="sun-intensity" min="0" max="3" step="0.05" value="1" />
+                <span id="sun-intensity-value">1</span>
+              </div>
+              <div class="control-row">
+                <label for="sun-color">Sun color</label>
+                <input type="color" id="sun-color" value="#ffffff" />
               </div>
             </div>
           </div>

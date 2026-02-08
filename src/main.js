@@ -2,8 +2,9 @@ import './style.css'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
+import { Sky } from 'three/addons/objects/Sky.js'
 import { saveGlvl, loadGlvlFromFile } from './lib/glvl-io.js'
-import { saveGlb, loadGlbFromFile, loadGlbFromUrl } from './lib/glb-io.js'
+import { loadGlbFromFile } from './lib/glb-io.js'
 import { generateMaze as generateMazeGrid } from './lib/maze-generator.js'
 import { createInputHandler } from './lib/input-commands.js'
 
@@ -47,6 +48,12 @@ const viewport = document.getElementById('viewport')
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0x1a1a1a)
 
+// Sky (Preetham model) - added as mesh so it can be toggled or edited
+const sky = new Sky()
+sky.scale.setScalar(450000)
+scene.add(sky)
+const sun = new THREE.Vector3()
+
 const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000)
 camera.position.set(8, 8, 8)
 
@@ -55,6 +62,8 @@ renderer.setPixelRatio(window.devicePixelRatio)
 renderer.setSize(viewport.clientWidth, viewport.clientHeight)
 renderer.shadowMap.enabled = false
 renderer.outputColorSpace = THREE.SRGBColorSpace
+renderer.toneMapping = THREE.ACESFilmicToneMapping
+renderer.toneMappingExposure = 0.5
 viewport.appendChild(renderer.domElement)
 
 // Lighting
@@ -465,6 +474,44 @@ function bakeScaleIntoGeometry(mesh) {
 }
 
 // --- Level serialization (app-specific) ---
+function getSkyboxState() {
+  return {
+    turbidity: parseFloat(document.getElementById('sky-turbidity')?.value ?? '10'),
+    rayleigh: parseFloat(document.getElementById('sky-rayleigh')?.value ?? '3'),
+    mieCoefficient: parseFloat(document.getElementById('sky-mie')?.value ?? '0.005'),
+    mieDirectionalG: parseFloat(document.getElementById('sky-mie-g')?.value ?? '0.7'),
+    elevation: parseFloat(document.getElementById('sky-elevation')?.value ?? '2'),
+    azimuth: parseFloat(document.getElementById('sky-azimuth')?.value ?? '180'),
+    exposure: parseFloat(document.getElementById('sky-exposure')?.value ?? '0.5'),
+    sunIntensity: parseFloat(document.getElementById('sun-intensity')?.value ?? '1'),
+    sunColor: document.getElementById('sun-color')?.value ?? '#ffffff',
+  }
+}
+
+function setSkyboxState(state) {
+  if (!state || typeof state !== 'object') return
+  const set = (id, value) => {
+    const el = document.getElementById(id)
+    if (!el) return
+    el.value = value
+    const valueEl = document.getElementById(`${id}-value`)
+    if (valueEl) valueEl.textContent = value
+  }
+  if (state.turbidity != null) set('sky-turbidity', state.turbidity)
+  if (state.rayleigh != null) set('sky-rayleigh', state.rayleigh)
+  if (state.mieCoefficient != null) set('sky-mie', state.mieCoefficient)
+  if (state.mieDirectionalG != null) set('sky-mie-g', state.mieDirectionalG)
+  if (state.elevation != null) set('sky-elevation', state.elevation)
+  if (state.azimuth != null) set('sky-azimuth', state.azimuth)
+  if (state.exposure != null) set('sky-exposure', state.exposure)
+  if (state.sunIntensity != null) set('sun-intensity', state.sunIntensity)
+  if (state.sunColor != null) {
+    const colorEl = document.getElementById('sun-color')
+    if (colorEl) colorEl.value = state.sunColor
+  }
+  applySkyParams()
+}
+
 function serializeLevel() {
   return {
     version: 1,
@@ -485,6 +532,7 @@ function serializeLevel() {
       }
       return base
     }),
+    skybox: getSkyboxState(),
   }
 }
 
@@ -512,15 +560,12 @@ function deserializeLevel(data) {
     scene.add(mesh)
     brushes.push(mesh)
   })
+  if (data.skybox) setSkyboxState(data.skybox)
   selectBrush(null)
 }
 
-async function saveLevel(format) {
-  if (format === 'glb') {
-    await saveGlb(brushes, { filename: 'level.glb' })
-  } else {
-    await saveGlvl(serializeLevel(), { filename: 'level.glvl' })
-  }
+async function saveLevel() {
+  await saveGlvl(serializeLevel(), { filename: 'level.glvl' })
 }
 
 function addImportedMeshes(meshes) {
@@ -570,15 +615,41 @@ function loadLevelFromFile() {
   input.click()
 }
 
-async function loadLevelFromUrl(url) {
-  const meshes = await loadGlbFromUrl(url)
-  addImportedMeshes(meshes)
-}
-
 // --- Mode tabs ---
 let editorMode = 'brush'
 const brushControls = document.getElementById('brush-controls')
 const mazeControls = document.getElementById('maze-controls')
+const skyboxControls = document.getElementById('skybox-controls')
+
+function applySkyParams() {
+  const turbidity = parseFloat(document.getElementById('sky-turbidity').value)
+  const rayleigh = parseFloat(document.getElementById('sky-rayleigh').value)
+  const mieCoefficient = parseFloat(document.getElementById('sky-mie').value)
+  const mieDirectionalG = parseFloat(document.getElementById('sky-mie-g').value)
+  const elevation = parseFloat(document.getElementById('sky-elevation').value)
+  const azimuth = parseFloat(document.getElementById('sky-azimuth').value)
+  const exposure = parseFloat(document.getElementById('sky-exposure').value)
+
+  const uniforms = sky.material.uniforms
+  uniforms.turbidity.value = turbidity
+  uniforms.rayleigh.value = rayleigh
+  uniforms.mieCoefficient.value = mieCoefficient
+  uniforms.mieDirectionalG.value = mieDirectionalG
+
+  const phi = THREE.MathUtils.degToRad(90 - elevation)
+  const theta = THREE.MathUtils.degToRad(azimuth)
+  sun.setFromSphericalCoords(1, phi, theta)
+  uniforms.sunPosition.value.copy(sun)
+
+  // Match directional light to sun (light shines from position toward origin)
+  dirLight.position.copy(sun).multiplyScalar(500)
+  const sunIntensity = parseFloat(document.getElementById('sun-intensity')?.value ?? '1')
+  const sunColorHex = document.getElementById('sun-color')?.value ?? '#ffffff'
+  dirLight.intensity = sunIntensity
+  dirLight.color.set(sunColorHex)
+
+  renderer.toneMappingExposure = exposure
+}
 
 function setEditorMode(mode) {
   editorMode = mode
@@ -586,10 +657,12 @@ function setEditorMode(mode) {
   document.getElementById(`tab-${mode}`).classList.add('active')
   brushControls.classList.toggle('hidden', mode !== 'brush')
   mazeControls.classList.toggle('hidden', mode !== 'maze')
+  skyboxControls.classList.toggle('hidden', mode !== 'skybox')
 }
 
 document.getElementById('tab-brush').addEventListener('click', () => setEditorMode('brush'))
 document.getElementById('tab-maze').addEventListener('click', () => setEditorMode('maze'))
+document.getElementById('tab-skybox').addEventListener('click', () => setEditorMode('skybox'))
 
 // --- Collapsible panels ---
 document.querySelectorAll('.panel-header').forEach((btn) => {
@@ -621,6 +694,28 @@ document.getElementById('maze-exit-width').addEventListener('input', (e) => {
 document.getElementById('maze-center-size').addEventListener('input', (e) => {
   document.getElementById('maze-center-size-value').textContent = e.target.value
 })
+
+// Skybox slider value display and apply
+function bindSkySlider(id, valueId) {
+  const input = document.getElementById(id)
+  const valueEl = document.getElementById(valueId)
+  if (!input || !valueEl) return
+  input.addEventListener('input', (e) => {
+    valueEl.textContent = e.target.value
+    applySkyParams()
+  })
+}
+bindSkySlider('sky-turbidity', 'sky-turbidity-value')
+bindSkySlider('sky-rayleigh', 'sky-rayleigh-value')
+bindSkySlider('sky-mie', 'sky-mie-value')
+bindSkySlider('sky-mie-g', 'sky-mie-g-value')
+bindSkySlider('sky-elevation', 'sky-elevation-value')
+bindSkySlider('sky-azimuth', 'sky-azimuth-value')
+bindSkySlider('sky-exposure', 'sky-exposure-value')
+bindSkySlider('sun-intensity', 'sun-intensity-value')
+const sunColorInput = document.getElementById('sun-color')
+if (sunColorInput) sunColorInput.addEventListener('input', applySkyParams)
+applySkyParams()
 
 // Show/hide center room size when layout changes
 function updateCenterRoomVisibility() {
@@ -673,38 +768,8 @@ document.getElementById('btn-rotate').addEventListener('click', () => inputHandl
 document.getElementById('btn-scale').addEventListener('click', () => inputHandler.setTransformMode('scale'))
 document.getElementById('btn-delete').addEventListener('click', () => inputHandler.deleteSelected())
 document.getElementById('btn-generate-maze').addEventListener('click', generateMaze)
-// Save dropdown
-const saveMenu = document.getElementById('save-menu')
-document.getElementById('btn-save').addEventListener('click', (e) => {
-  e.stopPropagation()
-  saveMenu.classList.toggle('open')
-})
-document.querySelectorAll('.save-menu button').forEach((btn) => {
-  btn.addEventListener('click', (e) => {
-    saveLevel(e.target.dataset.format)
-    saveMenu.classList.remove('open')
-  })
-})
-document.addEventListener('click', () => saveMenu.classList.remove('open'))
-
-// Load dropdown
-const loadMenu = document.getElementById('load-menu')
-document.getElementById('btn-load').addEventListener('click', (e) => {
-  e.stopPropagation()
-  loadMenu.classList.toggle('open')
-})
-document.querySelectorAll('.load-menu button').forEach((btn) => {
-  btn.addEventListener('click', (e) => {
-    const load = e.target.dataset.load
-    if (load === 'file') {
-      loadLevelFromFile()
-    } else if (load === 'url' && e.target.dataset.url) {
-      loadLevelFromUrl(e.target.dataset.url)
-    }
-    loadMenu.classList.remove('open')
-  })
-})
-document.addEventListener('click', () => loadMenu.classList.remove('open'))
+document.getElementById('btn-save').addEventListener('click', () => saveLevel())
+document.getElementById('btn-load').addEventListener('click', () => loadLevelFromFile())
 
 // --- Resize ---
 const resizeObserver = new ResizeObserver(() => {
