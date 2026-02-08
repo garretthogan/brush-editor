@@ -33,12 +33,15 @@ function getTextureUrl(index) {
   return `${baseUrl}textures/${palette}/${file}`
 }
 
-function loadTextureForSpawn() {
+function getSelectedTextureIndex() {
   const select = document.getElementById('texture-select')
   const value = select?.value
-  const index = value === 'random' || value === ''
+  return value === 'random' || value === ''
     ? Math.floor(Math.random() * TEXTURE_POOL.length)
     : Math.max(0, Math.min(parseInt(value, 10) || 0, TEXTURE_POOL.length - 1))
+}
+
+function loadTextureByIndex(index) {
   const url = getTextureUrl(index)
   const tex = textureLoader.load(url)
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping
@@ -59,6 +62,19 @@ function getArenaTexture() {
   return tex
 }
 
+function resolveBrushTexture(textureInfo) {
+  if (textureInfo?.key === 'arena') return getArenaTexture()
+  if (typeof textureInfo?.index === 'number') return loadTextureByIndex(textureInfo.index)
+  const index = getSelectedTextureIndex()
+  return loadTextureByIndex(index)
+}
+
+function resolveBrushTextureInfo(textureInfo) {
+  if (textureInfo?.key === 'arena') return { key: 'arena' }
+  if (typeof textureInfo?.index === 'number') return { index: textureInfo.index }
+  return { index: getSelectedTextureIndex() }
+}
+
 function applyArenaTexture(mesh) {
   if (!mesh?.material) return
   const tex = getArenaTexture()
@@ -67,6 +83,8 @@ function applyArenaTexture(mesh) {
   }
   mesh.material.map = tex
   mesh.material.needsUpdate = true
+  mesh.userData.textureKey = 'arena'
+  mesh.userData.textureIndex = null
 }
 
 function clamp(value, min, max) {
@@ -85,7 +103,7 @@ sky.scale.setScalar(450000)
 scene.add(sky)
 const sun = new THREE.Vector3()
 
-const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000)
+const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 5000)
 camera.position.set(8, 8, 8)
 
 const renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -192,6 +210,8 @@ const brushes = []
 let selectedBrush = null
 let currentTool = 'select'
 let arenaPreview = null
+let mazePreview = null
+let lastArenaWallHeight = 3
 
 // --- Light State ---
 const lights = [] // { light, helper, type: 'point'|'spot'|'directional'|'ambient' }
@@ -276,10 +296,11 @@ function setBoxUVs(geometry, sx, sy, sz) {
   uv.needsUpdate = true
 }
 
-function createBrushMesh(size = [2, 2, 2], position = [0, 1, 0], depthBias = 0) {
+function createBrushMesh(size = [2, 2, 2], position = [0, 1, 0], depthBias = 0, textureInfo = null) {
   const geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
   setBoxUVs(geometry, size[0], size[1], size[2])
-  const texture = loadTextureForSpawn()
+  const resolvedInfo = resolveBrushTextureInfo(textureInfo)
+  const texture = resolveBrushTexture(resolvedInfo)
   const material = new THREE.MeshStandardMaterial({
     map: texture,
     flatShading: false,
@@ -294,13 +315,16 @@ function createBrushMesh(size = [2, 2, 2], position = [0, 1, 0], depthBias = 0) 
   mesh.userData.isBrush = true
   mesh.userData.type = 'box'
   mesh.userData.size = [...size]
+  if (resolvedInfo.key) mesh.userData.textureKey = resolvedInfo.key
+  if (typeof resolvedInfo.index === 'number') mesh.userData.textureIndex = resolvedInfo.index
   return mesh
 }
 
-function createCylinderMesh(radius = 1, height = 2, position = [0, 1, 0], depthBias = 0) {
+function createCylinderMesh(radius = 1, height = 2, position = [0, 1, 0], depthBias = 0, textureInfo = null) {
   const geometry = new THREE.CylinderGeometry(radius, radius, height, 16, 1)
   setCylinderUVs(geometry, radius, height, 16, 1)
-  const texture = loadTextureForSpawn()
+  const resolvedInfo = resolveBrushTextureInfo(textureInfo)
+  const texture = resolveBrushTexture(resolvedInfo)
   const material = new THREE.MeshStandardMaterial({
     map: texture,
     flatShading: false,
@@ -316,6 +340,8 @@ function createCylinderMesh(radius = 1, height = 2, position = [0, 1, 0], depthB
   mesh.userData.type = 'cylinder'
   mesh.userData.radius = radius
   mesh.userData.height = height
+  if (resolvedInfo.key) mesh.userData.textureKey = resolvedInfo.key
+  if (typeof resolvedInfo.index === 'number') mesh.userData.textureIndex = resolvedInfo.index
   return mesh
 }
 
@@ -702,13 +728,14 @@ function getArenaControls() {
   }
 }
 
-function mazeGridToMeshes(grid, cols, rows, spaceBetweenWalls, wallThickness, wallHeight) {
+function mazeGridToMeshes(grid, cols, rows, spaceBetweenWalls, wallThickness, wallHeight, offset = [0, 0, 0], rotation = null) {
   const w = cols * 2 + 1
   const h = rows * 2 + 1
   const unitSize = spaceBetweenWalls
   const segmentLength = unitSize * 2
   const ox = ((w - 1) / 2) * unitSize
   const oz = ((h - 1) / 2) * unitSize
+  const [offX, offY, offZ] = offset
 
   const isOuterCorner = (x, z) =>
     (x === 0 && z === 0) || (x === w - 1 && z === 0) || (x === 0 && z === h - 1) || (x === w - 1 && z === h - 1)
@@ -720,8 +747,8 @@ function mazeGridToMeshes(grid, cols, rows, spaceBetweenWalls, wallThickness, wa
       const horz = x % 2 === 0
       const vert = z % 2 === 0
       if (horz && vert && !isOuterCorner(x, z) && !onBoundary(x, z)) continue
-      const px = x * unitSize - ox
-      const pz = z * unitSize - oz
+      const localX = x * unitSize - ox
+      const localZ = z * unitSize - oz
       let sx, sz
       if (horz && vert) {
         sx = wallThickness
@@ -733,7 +760,10 @@ function mazeGridToMeshes(grid, cols, rows, spaceBetweenWalls, wallThickness, wa
         sx = horz ? wallThickness : segmentLength
         sz = horz ? segmentLength : wallThickness
       }
-      addBrushMesh([sx, wallHeight, sz], [px, wallHeight / 2, pz])
+      const rotated = rotateArenaPoint(localX, localZ, rotation)
+      const px = rotated.x + offX
+      const pz = rotated.z + offZ
+      addMazeBrushMesh([sx, wallHeight, sz], [px, wallHeight / 2 + offY, pz], rotation)
     }
   }
 }
@@ -745,7 +775,23 @@ function rotateArenaPoint(x, z, rotation) {
   return { x: vec.x, z: vec.z }
 }
 
-function arenaGridToMeshes(grid, tileSize, obstacleHeight, offset = [0, 0, 0], rotation = null) {
+function addMazeBrushMesh(size, position, rotation) {
+  const mesh = addBrushMesh(size, position)
+  applyArenaTexture(mesh)
+  mesh.userData.isUserBrush = false
+  mesh.userData.generator = 'maze'
+  if (rotation) mesh.rotation.copy(rotation)
+  return mesh
+}
+
+function addMazeFloor(width, depth, thickness, offset = [0, 0, 0], rotation = null) {
+  const position = [offset[0], thickness / 2 + offset[1], offset[2]]
+  const mesh = addMazeBrushMesh([width, thickness, depth], position, rotation)
+  applyArenaTexture(mesh)
+  return mesh
+}
+
+function arenaGridToMeshes(grid, tileSize, wallHeight, offset = [0, 0, 0], rotation = null) {
   const cols = grid.length
   const rows = grid[0].length
   const ox = ((cols - 1) / 2) * tileSize
@@ -759,16 +805,17 @@ function arenaGridToMeshes(grid, tileSize, obstacleHeight, offset = [0, 0, 0], r
       const rotated = rotateArenaPoint(localX, localZ, rotation)
       const px = rotated.x + offX
       const pz = rotated.z + offZ
-      const mesh = addBrushMesh([tileSize, obstacleHeight, tileSize], [px, obstacleHeight / 2 + offY, pz])
+      const mesh = addBrushMesh([tileSize, wallHeight, tileSize], [px, wallHeight / 2 + offY, pz])
+      mesh.userData.generator = 'arena'
       applyArenaTexture(mesh)
       if (rotation) mesh.rotation.copy(rotation)
     }
   }
 }
 
-function clearGeneratedBrushes() {
-  const toKeep = brushes.filter((m) => m.userData.isUserBrush)
-  const toRemove = brushes.filter((m) => !m.userData.isUserBrush)
+function clearGeneratedBrushesByGenerator(generator) {
+  const toKeep = brushes.filter((m) => m.userData.isUserBrush || m.userData.generator !== generator)
+  const toRemove = brushes.filter((m) => !m.userData.isUserBrush && m.userData.generator === generator)
   toRemove.forEach((m) => {
     scene.remove(m)
     m.geometry.dispose()
@@ -782,8 +829,8 @@ function clearGeneratedBrushes() {
 
 function generateMaze() {
   pushUndoState()
-  // Clear only generator brushes, keep user-added brushes
-  clearGeneratedBrushes()
+  if (!updateMazePreviewValidity()) return
+  clearGeneratedBrushesByGenerator('maze')
 
   const ctrl = getMazeControls()
   const { grid, cols, rows } = generateMazeGrid({
@@ -794,23 +841,33 @@ function generateMaze() {
     layout: ctrl.layout,
   })
 
+  const preview = ensureMazePreview()
+  const baseOffset = getPreviewBaseOffset(preview, ctrl.wallHeight)
+  const baseRotation = preview?.rotation ? preview.rotation.clone() : null
+  const mazeWidth = (cols * 2) * ctrl.spaceBetweenWalls
+  const mazeDepth = (rows * 2) * ctrl.spaceBetweenWalls
+  const floorThickness = Math.max(0.1, ctrl.spaceBetweenWalls * 0.1)
+  addMazeFloor(mazeWidth, mazeDepth, floorThickness, baseOffset, baseRotation)
   mazeGridToMeshes(
     grid,
     cols,
     rows,
     ctrl.spaceBetweenWalls,
     ctrl.wallThickness,
-    ctrl.wallHeight
+    ctrl.wallHeight,
+    baseOffset,
+    baseRotation
   )
 
   selectBrush(null)
 }
 
 function addArenaMarkerCylinder(radius, height, position) {
-  const mesh = createCylinderMesh(radius, height, position, brushes.length * 4)
+  const mesh = createCylinderMesh(radius, height, position, brushes.length * 4, { key: 'arena' })
   applyArenaTexture(mesh)
   mesh.userData.id = crypto.randomUUID()
   mesh.userData.isUserBrush = false
+  mesh.userData.generator = 'arena'
   mesh.castShadow = false
   mesh.receiveShadow = false
   scene.add(mesh)
@@ -819,10 +876,11 @@ function addArenaMarkerCylinder(radius, height, position) {
 }
 
 function addArenaCover(size, position) {
-  const mesh = createBrushMesh(size, position, brushes.length * 4)
+  const mesh = createBrushMesh(size, position, brushes.length * 4, { key: 'arena' })
   applyArenaTexture(mesh)
   mesh.userData.id = crypto.randomUUID()
   mesh.userData.isUserBrush = false
+  mesh.userData.generator = 'arena'
   mesh.castShadow = false
   mesh.receiveShadow = false
   scene.add(mesh)
@@ -870,11 +928,17 @@ function updateArenaPreviewFromControls() {
   const obstacleValue = document.getElementById('arena-obstacle-height-value')
   if (obstacleInput) {
     obstacleInput.max = String(ctrl.wallHeight)
-    if (ctrl.obstacleHeight < parseFloat(obstacleInput.value)) {
+    const obstacleInputValue = parseFloat(obstacleInput.value)
+    const shouldTrackWall = Math.abs(obstacleInputValue - lastArenaWallHeight) < 0.001
+    if (shouldTrackWall) {
+      obstacleInput.value = String(ctrl.wallHeight)
+      if (obstacleValue) obstacleValue.textContent = String(ctrl.wallHeight)
+    } else if (ctrl.obstacleHeight < obstacleInputValue) {
       obstacleInput.value = String(ctrl.obstacleHeight)
       if (obstacleValue) obstacleValue.textContent = String(ctrl.obstacleHeight)
     }
   }
+  lastArenaWallHeight = ctrl.wallHeight
   const size = [ctrl.cols * ctrl.tileSize, ctrl.wallHeight, ctrl.rows * ctrl.tileSize]
   const preview = ensureArenaPreview()
   preview.geometry.dispose()
@@ -887,30 +951,98 @@ function updateArenaPreviewFromControls() {
   }
 }
 
+function createMazePreviewMesh(size, position) {
+  const geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xff3333,
+    transparent: true,
+    opacity: 0.25,
+    depthWrite: false,
+  })
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.position.set(...position)
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  mesh.userData.isBrush = true
+  mesh.userData.isUserBrush = true
+  mesh.userData.isMazePreview = true
+  mesh.userData.type = 'maze-preview'
+  mesh.userData.size = [...size]
+  return mesh
+}
+
+function ensureMazePreview() {
+  if (mazePreview && brushes.includes(mazePreview)) return mazePreview
+  const ctrl = getMazeControls()
+  const w = ctrl.cols * 2 + 1
+  const h = ctrl.rows * 2 + 1
+  const width = (w - 1) * ctrl.spaceBetweenWalls
+  const depth = (h - 1) * ctrl.spaceBetweenWalls
+  const size = [width, ctrl.wallHeight, depth]
+  const position = [0, ctrl.wallHeight / 2, 0]
+  mazePreview = createMazePreviewMesh(size, position)
+  mazePreview.userData.id = crypto.randomUUID()
+  mazePreview.userData.mazeCols = ctrl.cols
+  mazePreview.userData.mazeRows = ctrl.rows
+  scene.add(mazePreview)
+  brushes.push(mazePreview)
+  return mazePreview
+}
+
+function updateMazePreviewFromControls() {
+  const ctrl = getMazeControls()
+  const w = ctrl.cols * 2 + 1
+  const h = ctrl.rows * 2 + 1
+  const width = (w - 1) * ctrl.spaceBetweenWalls
+  const depth = (h - 1) * ctrl.spaceBetweenWalls
+  const size = [width, ctrl.wallHeight, depth]
+  const preview = ensureMazePreview()
+  preview.geometry.dispose()
+  preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
+  preview.userData.size = [...size]
+  preview.userData.mazeCols = ctrl.cols
+  preview.userData.mazeRows = ctrl.rows
+  if (!preview.position || Number.isNaN(preview.position.y)) {
+    preview.position.set(0, ctrl.wallHeight / 2, 0)
+  }
+}
+
 function getBrushWorldBox(mesh) {
   const box = new THREE.Box3()
   return box.setFromObject(mesh)
 }
 
-function isArenaPreviewValid() {
-  if (!arenaPreview || !arenaPreview.visible) return false
-  const previewBox = getBrushWorldBox(arenaPreview)
+function isPreviewValid(preview, otherPreview) {
+  if (!preview || !preview.visible) return false
+  const previewBox = getBrushWorldBox(preview)
+  if (otherPreview?.visible) {
+    const otherBox = getBrushWorldBox(otherPreview)
+    if (previewBox.intersectsBox(otherBox)) return false
+  }
   for (const brush of brushes) {
-    if (!brush || brush === arenaPreview) continue
-    if (brush.userData?.isArenaPreview) continue
+    if (!brush || brush === preview || brush === otherPreview) continue
+    if (brush.userData?.isArenaPreview || brush.userData?.isMazePreview) continue
     const brushBox = getBrushWorldBox(brush)
     if (previewBox.intersectsBox(brushBox)) return false
   }
   return true
 }
 
-function updateArenaPreviewValidity() {
-  if (!arenaPreview) return false
-  const valid = isArenaPreviewValid()
-  if (arenaPreview.material?.color) {
-    arenaPreview.material.color.set(valid ? 0x33ff66 : 0xff3333)
+function updatePreviewValidity(preview, otherPreview) {
+  if (!preview) return false
+  const valid = isPreviewValid(preview, otherPreview)
+  if (preview.material?.color) {
+    preview.material.color.set(valid ? 0x33ff66 : 0xff3333)
   }
   return valid
+}
+
+function updateArenaPreviewValidity() {
+  return updatePreviewValidity(arenaPreview, mazePreview)
+}
+
+function updateMazePreviewValidity() {
+  return updatePreviewValidity(mazePreview, arenaPreview)
 }
 
 function snapScaledCount(count, scale, min, max) {
@@ -950,14 +1082,56 @@ function syncArenaControlsFromPreview(preview, scale) {
   preview.position.y = wallHeight / 2
 }
 
+function syncMazeControlsFromPreview(preview, scale) {
+  if (!preview) return
+  const spaceBetweenWalls = parseFloat(document.getElementById('maze-space')?.value ?? '1')
+  if (!spaceBetweenWalls || Number.isNaN(spaceBetweenWalls)) return
+  const wallHeight = parseFloat(document.getElementById('maze-height')?.value ?? '1')
+  const colsEl = document.getElementById('maze-cols')
+  const rowsEl = document.getElementById('maze-rows')
+  const colsValueEl = document.getElementById('maze-cols-value')
+  const rowsValueEl = document.getElementById('maze-rows-value')
+  if (!colsEl || !rowsEl) return
+  const minCols = parseInt(colsEl.min ?? '1', 10)
+  const maxCols = parseInt(colsEl.max ?? '999', 10)
+  const minRows = parseInt(rowsEl.min ?? '1', 10)
+  const maxRows = parseInt(rowsEl.max ?? '999', 10)
+  const baseCols = preview.userData.mazeCols ?? parseInt(colsEl.value, 10) ?? 1
+  const baseRows = preview.userData.mazeRows ?? parseInt(rowsEl.value, 10) ?? 1
+  const nextCols = snapScaledCount(baseCols, scale.x, minCols, maxCols)
+  const nextRows = snapScaledCount(baseRows, scale.z, minRows, maxRows)
+  colsEl.value = String(nextCols)
+  rowsEl.value = String(nextRows)
+  if (colsValueEl) colsValueEl.textContent = String(nextCols)
+  if (rowsValueEl) rowsValueEl.textContent = String(nextRows)
+  const w = nextCols * 2 + 1
+  const h = nextRows * 2 + 1
+  const width = (w - 1) * spaceBetweenWalls
+  const depth = (h - 1) * spaceBetweenWalls
+  const size = [width, wallHeight, depth]
+  preview.geometry.dispose()
+  preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
+  preview.userData.size = [...size]
+  preview.userData.mazeCols = nextCols
+  preview.userData.mazeRows = nextRows
+  preview.position.y = wallHeight / 2
+}
+
 function addArenaFloor(cols, rows, tileSize, offset = [0, 0, 0], rotation = null) {
   const thickness = Math.max(0.1, tileSize * 0.1)
   const width = cols * tileSize
   const depth = rows * tileSize
   const position = [offset[0], thickness / 2 + offset[1], offset[2]]
   const mesh = addArenaCover([width, thickness, depth], position)
+  mesh.userData.generator = 'arena'
   if (rotation) mesh.rotation.copy(rotation)
   return mesh
+}
+
+function getPreviewBaseOffset(preview, height) {
+  if (!preview?.position) return [0, 0, 0]
+  const pos = preview.position.toArray()
+  return [pos[0], pos[1] - height / 2, pos[2]]
 }
 
 function placeArenaMarkers(arena, tileSize, wallHeight, obstacleHeight, offset = [0, 0, 0], rotation = null) {
@@ -1024,10 +1198,10 @@ function generateArena() {
   })
 
   const preview = ensureArenaPreview()
-  const baseOffset = preview?.position ? preview.position.toArray() : [0, 0, 0]
+  const baseOffset = getPreviewBaseOffset(preview, ctrl.wallHeight)
   const baseRotation = preview?.rotation ? preview.rotation.clone() : null
   addArenaFloor(ctrl.cols, ctrl.rows, ctrl.tileSize, baseOffset, baseRotation)
-  arenaGridToMeshes(arena.grid, ctrl.tileSize, ctrl.obstacleHeight, baseOffset, baseRotation)
+  arenaGridToMeshes(arena.grid, ctrl.tileSize, ctrl.wallHeight, baseOffset, baseRotation)
   placeArenaMarkers(arena, ctrl.tileSize, ctrl.wallHeight, ctrl.obstacleHeight, baseOffset, baseRotation)
 
   selectBrush(null)
@@ -1080,7 +1254,13 @@ function cloneBrush(mesh) {
   const rotation = mesh.rotation.toArray().slice(0, 3)
   let clone
   if (mesh.userData.type === 'cylinder') {
-    clone = createCylinderMesh(mesh.userData.radius, mesh.userData.height, position, brushes.length * 4)
+    clone = createCylinderMesh(
+      mesh.userData.radius,
+      mesh.userData.height,
+      position,
+      brushes.length * 4,
+      { key: mesh.userData.textureKey, index: mesh.userData.textureIndex }
+    )
   } else if (mesh.userData.type === 'imported') {
     clone = mesh.clone()
     clone.geometry = mesh.geometry.clone()
@@ -1089,7 +1269,12 @@ function cloneBrush(mesh) {
     clone.userData = { ...mesh.userData, id: crypto.randomUUID(), outline: null }
     clone.scale.copy(mesh.scale)
   } else {
-    clone = createBrushMesh([...mesh.userData.size], position, brushes.length * 4)
+    clone = createBrushMesh(
+      [...mesh.userData.size],
+      position,
+      brushes.length * 4,
+      { key: mesh.userData.textureKey, index: mesh.userData.textureIndex }
+    )
   }
   clone.userData.id = clone.userData.id ?? crypto.randomUUID()
   clone.userData.isUserBrush = true
@@ -1102,7 +1287,7 @@ function cloneBrush(mesh) {
 
 function deleteSelected() {
   if (!selectedBrush) return
-  if (selectedBrush.userData?.isArenaPreview) return
+  if (selectedBrush.userData?.isArenaPreview || selectedBrush.userData?.isMazePreview) return
   pushUndoState()
   const idx = brushes.indexOf(selectedBrush)
   if (idx !== -1) brushes.splice(idx, 1)
@@ -1198,6 +1383,15 @@ function bakeScaleIntoGeometry(mesh) {
     }
     return
   }
+  if (mesh.userData.isMazePreview) {
+    syncMazeControlsFromPreview(mesh, s)
+    mesh.scale.set(1, 1, 1)
+    if (outline) {
+      outline.geometry.dispose()
+      outline.geometry = mesh.geometry.clone()
+    }
+    return
+  }
 
   if (mesh.userData.type === 'imported') {
     mesh.geometry.scale(s.x, s.y, s.z)
@@ -1283,7 +1477,7 @@ function serializeLevel() {
   return {
     version: 2,
     brushes: brushes
-      .filter((m) => m.userData.type !== 'imported' && !m.userData.isArenaPreview)
+      .filter((m) => m.userData.type !== 'imported' && !m.userData.isArenaPreview && !m.userData.isMazePreview)
       .map((m) => {
       const base = {
         id: m.userData.id,
@@ -1291,6 +1485,8 @@ function serializeLevel() {
         position: m.position.toArray(),
         rotation: m.rotation.toArray().slice(0, 3),
       }
+      if (m.userData.textureKey) base.textureKey = m.userData.textureKey
+      if (typeof m.userData.textureIndex === 'number') base.textureIndex = m.userData.textureIndex
       if (base.type === 'cylinder') {
         base.radius = m.userData.radius
         base.height = m.userData.height
@@ -1338,10 +1534,22 @@ function deserializeLevel(data) {
 
   data.brushes.forEach((b) => {
     let mesh
+    const textureInfo = b.textureKey ? { key: b.textureKey } : { index: b.textureIndex }
     if (b.type === 'cylinder') {
-      mesh = createCylinderMesh(b.radius ?? 1, b.height ?? 2, b.position ?? [0, 1, 0], brushes.length * 4)
+      mesh = createCylinderMesh(
+        b.radius ?? 1,
+        b.height ?? 2,
+        b.position ?? [0, 1, 0],
+        brushes.length * 4,
+        textureInfo
+      )
     } else {
-      mesh = createBrushMesh(b.size ?? [2, 2, 2], b.position ?? [0, 1, 0], brushes.length * 4)
+      mesh = createBrushMesh(
+        b.size ?? [2, 2, 2],
+        b.position ?? [0, 1, 0],
+        brushes.length * 4,
+        textureInfo
+      )
     }
     mesh.userData.id = b.id || crypto.randomUUID()
     mesh.position.fromArray(b.position ?? [0, 1, 0])
@@ -1524,11 +1732,21 @@ function setEditorMode(mode) {
     updateArenaPreviewFromControls()
     updateArenaPreviewValidity()
     if (arenaPreview) arenaPreview.visible = true
+    if (mazePreview) mazePreview.visible = false
+    setCurrentTool('translate')
+    setTransformMode('translate')
+  } else if (mode === 'maze') {
+    updateMazePreviewFromControls()
+    updateMazePreviewValidity()
+    if (mazePreview) mazePreview.visible = true
+    if (arenaPreview) arenaPreview.visible = false
     setCurrentTool('translate')
     setTransformMode('translate')
   } else if (arenaPreview) {
     arenaPreview.visible = false
     if (selectedBrush === arenaPreview) selectBrush(null)
+    if (mazePreview) mazePreview.visible = false
+    if (selectedBrush === mazePreview) selectBrush(null)
   }
 }
 
@@ -1590,6 +1808,21 @@ bindArenaSlider('arena-corridor', 'arena-corridor-value')
 bindArenaSlider('arena-exit-width', 'arena-exit-width-value')
 bindArenaSlider('arena-candidates', 'arena-candidates-value')
 
+// --- Maze preview updates ---
+function bindMazeSlider(id, valueId, onChange) {
+  const input = document.getElementById(id)
+  const valueEl = document.getElementById(valueId)
+  if (!input || !valueEl) return
+  input.addEventListener('input', (e) => {
+    valueEl.textContent = e.target.value
+    if (onChange) onChange()
+  })
+}
+bindMazeSlider('maze-cols', 'maze-cols-value', updateMazePreviewFromControls)
+bindMazeSlider('maze-rows', 'maze-rows-value', updateMazePreviewFromControls)
+bindMazeSlider('maze-space', 'maze-space-value', updateMazePreviewFromControls)
+bindMazeSlider('maze-height', 'maze-height-value', updateMazePreviewFromControls)
+
 // Skybox slider value display and apply
 function bindSkySlider(id, valueId) {
   const input = document.getElementById(id)
@@ -1611,6 +1844,9 @@ bindSkySlider('sun-intensity', 'sun-intensity-value')
 const sunColorInput = document.getElementById('sun-color')
 if (sunColorInput) sunColorInput.addEventListener('input', applySkyParams)
 applySkyParams()
+orbitControls.target.copy(sun)
+camera.lookAt(sun)
+orbitControls.update()
 
 // --- Camera speed control ---
 const cameraSpeedInput = document.getElementById('camera-speed')
@@ -1641,7 +1877,13 @@ renderer.domElement.addEventListener(
     const step = cameraZoomSpeed * sign
     const nextDistance = distance - step
     const clampedStep = nextDistance <= 0.05 ? distance - 0.05 : step
-    camera.position.addScaledVector(direction, clampedStep)
+    const maxDistance = camera.far * 0.95
+    const finalDistance = distance - clampedStep
+    if (finalDistance > maxDistance) {
+      camera.position.addScaledVector(direction, distance - maxDistance)
+    } else {
+      camera.position.addScaledVector(direction, clampedStep)
+    }
     orbitControls.update()
   },
   { passive: false }
@@ -1820,6 +2062,7 @@ function animate() {
   updateSpotLightHelpers()
   updateDirectionalLightHelpers()
   if (arenaPreview?.visible) updateArenaPreviewValidity()
+  if (mazePreview?.visible) updateMazePreviewValidity()
   renderer.render(scene, camera)
 }
 animate()

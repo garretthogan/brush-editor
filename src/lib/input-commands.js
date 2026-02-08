@@ -175,6 +175,11 @@ export function createInputHandler(ctx) {
         if (ctx.selectLight) ctx.selectLight(null)
         return
       }
+      if (brush.userData?.isMazePreview && ctx.getEditorMode && ctx.getEditorMode() !== 'maze') {
+        ctx.selectBrush(null)
+        if (ctx.selectLight) ctx.selectLight(null)
+        return
+      }
       new SelectBrushCommand(brush).execute(ctx)
       if (ctx.selectLight) ctx.selectLight(null)
     } else {
