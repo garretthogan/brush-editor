@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { saveGlvl, loadGlvl } from './lib/glvl-io.js'
 import { generateMaze as generateMazeGrid } from './lib/maze-generator.js'
+import { createInputHandler } from './lib/input-commands.js'
 
 const GRID_COLOR = 0x333333
 const OUTLINE_COLOR = 0xff8800
@@ -50,19 +51,10 @@ const transformControls = new TransformControls(camera, renderer.domElement)
 transformControls.setSize(0.4)
 scene.add(transformControls.getHelper()) // Helper must be in scene for gizmo to render
 
-transformControls.addEventListener('dragging-changed', (e) => {
-  orbitControls.enabled = !e.value
-  if (e.value) {
-    pushUndoState()
-  }
-  if (!e.value && selectedBrush && transformControls.getMode() === 'scale') {
-    bakeScaleIntoGeometry(selectedBrush)
-  }
-})
-
 // --- Brush State ---
 const brushes = []
 let selectedBrush = null
+let currentTool = 'select'
 
 // --- Undo Stack ---
 const MAX_UNDO = 50
@@ -78,6 +70,33 @@ function undo() {
   if (undoStack.length === 0) return
   const state = JSON.parse(undoStack.pop())
   deserializeLevel(state)
+}
+
+// Scale cylinder UVs so texture tiles without stretching. Side: u = circumference, v = height. Caps: radial scale by diameter.
+function setCylinderUVs(geometry, radius, height, radialSegments = 16, heightSegments = 1) {
+  const uv = geometry.attributes.uv
+  if (!uv) return
+  const circumference = 2 * Math.PI * radius
+  const torsoCount = (radialSegments + 1) * (heightSegments + 1)
+  // Side (torso)
+  for (let i = 0; i < torsoCount; i++) {
+    const uVal = uv.getX(i)
+    const vVal = uv.getY(i)
+    uv.setXY(i, uVal * circumference, vVal * height)
+  }
+  // Caps (top and bottom): radial UVs centered at (0.5, 0.5), scale by 2*radius for tiling
+  const capScale = 2 * radius
+  const capVertexCount = radialSegments + (radialSegments + 1) // per cap
+  for (let cap = 0; cap < 2; cap++) {
+    const start = torsoCount + cap * (2 * radialSegments + 1)
+    const end = start + 2 * radialSegments + 1
+    for (let i = start; i < end; i++) {
+      const uVal = uv.getX(i)
+      const vVal = uv.getY(i)
+      uv.setXY(i, 0.5 + (uVal - 0.5) * capScale, 0.5 + (vVal - 0.5) * capScale)
+    }
+  }
+  uv.needsUpdate = true
 }
 
 // Scale box UVs per face so texture tiles without stretching. Keeps default UV axes (lines align with edges).
@@ -120,7 +139,31 @@ function createBrushMesh(size = [2, 2, 2], position = [0, 1, 0], depthBias = 0) 
   mesh.castShadow = false
   mesh.receiveShadow = false
   mesh.userData.isBrush = true
+  mesh.userData.type = 'box'
   mesh.userData.size = [...size]
+  return mesh
+}
+
+function createCylinderMesh(radius = 1, height = 2, position = [0, 1, 0], depthBias = 0) {
+  const geometry = new THREE.CylinderGeometry(radius, radius, height, 16, 1)
+  setCylinderUVs(geometry, radius, height, 16, 1)
+  const texture = defaultTexture.clone()
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping
+  const material = new THREE.MeshStandardMaterial({
+    map: texture,
+    flatShading: false,
+    polygonOffset: true,
+    polygonOffsetFactor: 2,
+    polygonOffsetUnits: depthBias,
+  })
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.position.set(...position)
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  mesh.userData.isBrush = true
+  mesh.userData.type = 'cylinder'
+  mesh.userData.radius = radius
+  mesh.userData.height = height
   return mesh
 }
 
@@ -134,6 +177,23 @@ function addBoxBrush() {
   scene.add(mesh)
   brushes.push(mesh)
   selectBrush(mesh)
+  setCurrentTool('translate')
+  setTransformMode('translate')
+}
+
+function addCylinderBrush() {
+  pushUndoState()
+  const radius = 1
+  const height = 2
+  const position = [0, 1, 0]
+  const mesh = createCylinderMesh(radius, height, position, brushes.length * 4)
+  mesh.userData.id = crypto.randomUUID()
+  mesh.userData.isUserBrush = true
+  scene.add(mesh)
+  brushes.push(mesh)
+  selectBrush(mesh)
+  setCurrentTool('translate')
+  setTransformMode('translate')
 }
 
 function addBrushMesh(size, position) {
@@ -263,6 +323,24 @@ function selectBrush(mesh) {
   }
 }
 
+function cloneBrush(mesh) {
+  const position = mesh.position.toArray()
+  const rotation = mesh.rotation.toArray().slice(0, 3)
+  let clone
+  if (mesh.userData.type === 'cylinder') {
+    clone = createCylinderMesh(mesh.userData.radius, mesh.userData.height, position, brushes.length * 4)
+  } else {
+    clone = createBrushMesh([...mesh.userData.size], position, brushes.length * 4)
+  }
+  clone.userData.id = crypto.randomUUID()
+  clone.userData.isUserBrush = true
+  clone.position.fromArray(position)
+  clone.rotation.fromArray(rotation)
+  scene.add(clone)
+  brushes.push(clone)
+  return clone
+}
+
 function deleteSelected() {
   if (!selectedBrush) return
   pushUndoState()
@@ -280,19 +358,13 @@ function deleteSelected() {
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 
-function onPointerClick(event) {
+function pickBrush(event) {
   const rect = viewport.getBoundingClientRect()
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-
   raycaster.setFromCamera(pointer, camera)
   const intersects = raycaster.intersectObjects(brushes)
-
-  if (intersects.length > 0) {
-    selectBrush(intersects[0].object)
-  } else {
-    selectBrush(null)
-  }
+  return intersects.length > 0 ? intersects[0].object : null
 }
 
 // Mode switching
@@ -303,19 +375,49 @@ function setTransformMode(mode) {
   }
 }
 
+function setCurrentTool(tool) {
+  currentTool = tool
+}
+
+function getCurrentTool() {
+  return currentTool
+}
+
 function bakeScaleIntoGeometry(mesh) {
   const s = mesh.scale
-  const base = mesh.userData.size
-  mesh.userData.size = [base[0] * s.x, base[1] * s.y, base[2] * s.z]
-  mesh.geometry.dispose()
-  const [sx, sy, sz] = mesh.userData.size
-  mesh.geometry = new THREE.BoxGeometry(sx, sy, sz)
-  setBoxUVs(mesh.geometry, sx, sy, sz)
-  mesh.scale.set(1, 1, 1)
   const outline = mesh.userData.outline
-  if (outline) {
-    outline.geometry.dispose()
-    outline.geometry = mesh.geometry.clone()
+
+  if (mesh.userData.type === 'cylinder') {
+    const r = mesh.userData.radius
+    const h = mesh.userData.height
+    mesh.userData.radius = r * Math.max(s.x, s.z)
+    mesh.userData.height = h * s.y
+    mesh.geometry.dispose()
+    mesh.geometry = new THREE.CylinderGeometry(
+      mesh.userData.radius,
+      mesh.userData.radius,
+      mesh.userData.height,
+      16,
+      1
+    )
+    setCylinderUVs(mesh.geometry, mesh.userData.radius, mesh.userData.height, 16, 1)
+    mesh.scale.set(1, 1, 1)
+    if (outline) {
+      outline.geometry.dispose()
+      outline.geometry = mesh.geometry.clone()
+    }
+  } else {
+    const base = mesh.userData.size
+    mesh.userData.size = [base[0] * s.x, base[1] * s.y, base[2] * s.z]
+    mesh.geometry.dispose()
+    const [sx, sy, sz] = mesh.userData.size
+    mesh.geometry = new THREE.BoxGeometry(sx, sy, sz)
+    setBoxUVs(mesh.geometry, sx, sy, sz)
+    mesh.scale.set(1, 1, 1)
+    if (outline) {
+      outline.geometry.dispose()
+      outline.geometry = mesh.geometry.clone()
+    }
   }
 }
 
@@ -323,13 +425,21 @@ function bakeScaleIntoGeometry(mesh) {
 function serializeLevel() {
   return {
     version: 1,
-    brushes: brushes.map((m) => ({
-      id: m.userData.id,
-      type: 'box',
-      position: m.position.toArray(),
-      size: [...m.userData.size],
-      rotation: m.rotation.toArray().slice(0, 3),
-    })),
+    brushes: brushes.map((m) => {
+      const base = {
+        id: m.userData.id,
+        type: m.userData.type || 'box',
+        position: m.position.toArray(),
+        rotation: m.rotation.toArray().slice(0, 3),
+      }
+      if (base.type === 'cylinder') {
+        base.radius = m.userData.radius
+        base.height = m.userData.height
+      } else {
+        base.size = [...m.userData.size]
+      }
+      return base
+    }),
   }
 }
 
@@ -345,9 +455,14 @@ function deserializeLevel(data) {
   brushes.length = 0
 
   data.brushes.forEach((b) => {
-    const mesh = createBrushMesh(b.size, b.position, brushes.length * 4)
+    let mesh
+    if (b.type === 'cylinder') {
+      mesh = createCylinderMesh(b.radius ?? 1, b.height ?? 2, b.position ?? [0, 1, 0], brushes.length * 4)
+    } else {
+      mesh = createBrushMesh(b.size ?? [2, 2, 2], b.position ?? [0, 1, 0], brushes.length * 4)
+    }
     mesh.userData.id = b.id || crypto.randomUUID()
-    mesh.position.fromArray(b.position)
+    mesh.position.fromArray(b.position ?? [0, 1, 0])
     if (b.rotation) mesh.rotation.fromArray(b.rotation)
     scene.add(mesh)
     brushes.push(mesh)
@@ -424,33 +539,38 @@ document.querySelectorAll('input[name="maze-layout"]').forEach((radio) => {
 })
 updateCenterRoomVisibility()
 
+// --- Input (command pattern) ---
+const inputHandler = createInputHandler({
+  viewport,
+  camera,
+  brushes,
+  get selectedBrush() {
+    return selectedBrush
+  },
+  selectBrush,
+  setTransformMode,
+  setCurrentTool,
+  getCurrentTool,
+  deleteSelected,
+  cloneBrush,
+  pushUndoState,
+  undo,
+  transformControls,
+  orbitControls,
+  bakeScaleIntoGeometry,
+  pickBrush,
+})
+
 // --- Toolbar ---
 document.getElementById('btn-add-box').addEventListener('click', addBoxBrush)
-document.getElementById('btn-select').addEventListener('click', () => setTransformMode('translate'))
-document.getElementById('btn-move').addEventListener('click', () => setTransformMode('translate'))
-document.getElementById('btn-rotate').addEventListener('click', () => setTransformMode('rotate'))
-document.getElementById('btn-scale').addEventListener('click', () => setTransformMode('scale'))
-document.getElementById('btn-delete').addEventListener('click', deleteSelected)
+document.getElementById('btn-add-cylinder').addEventListener('click', addCylinderBrush)
+document.getElementById('btn-move').addEventListener('click', () => inputHandler.setTransformMode('translate'))
+document.getElementById('btn-rotate').addEventListener('click', () => inputHandler.setTransformMode('rotate'))
+document.getElementById('btn-scale').addEventListener('click', () => inputHandler.setTransformMode('scale'))
+document.getElementById('btn-delete').addEventListener('click', () => inputHandler.deleteSelected())
 document.getElementById('btn-generate-maze').addEventListener('click', generateMaze)
 document.getElementById('btn-save').addEventListener('click', saveLevel)
 document.getElementById('btn-load').addEventListener('click', loadLevel)
-
-viewport.addEventListener('click', onPointerClick)
-
-document.addEventListener('keydown', (e) => {
-  const active = document.activeElement
-  const inInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')
-
-  if (!inInput) {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
-      e.preventDefault()
-      undo()
-    } else if (e.key === 'Delete' || e.key === 'Backspace') {
-      e.preventDefault()
-      deleteSelected()
-    }
-  }
-})
 
 // --- Resize ---
 const resizeObserver = new ResizeObserver(() => {
