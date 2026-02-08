@@ -213,7 +213,7 @@ function getMazeControls() {
     wallHeight: parseFloat(document.getElementById('maze-height').value),
     exitWidth: parseInt(document.getElementById('maze-exit-width').value, 10),
     centerRoomSize: parseInt(document.getElementById('maze-center-size').value, 10),
-    layout: document.querySelector('input[name="maze-layout"]:checked').value,
+    layout: document.getElementById('maze-start-from-center').checked ? 'center-out' : 'out-out',
   }
 }
 
@@ -531,12 +531,10 @@ document.getElementById('maze-center-size').addEventListener('input', (e) => {
 
 // Show/hide center room size when layout changes
 function updateCenterRoomVisibility() {
-  const centerOut = document.querySelector('input[name="maze-layout"]:checked').value === 'center-out'
+  const centerOut = document.getElementById('maze-start-from-center').checked
   document.getElementById('center-room-row').classList.toggle('hidden', !centerOut)
 }
-document.querySelectorAll('input[name="maze-layout"]').forEach((radio) => {
-  radio.addEventListener('change', updateCenterRoomVisibility)
-})
+document.getElementById('maze-start-from-center').addEventListener('change', updateCenterRoomVisibility)
 updateCenterRoomVisibility()
 
 // --- Input (command pattern) ---

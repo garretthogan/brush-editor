@@ -226,6 +226,14 @@ body {
   cursor: pointer;
 }
 
+.control-row label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: auto;
+  cursor: pointer;
+}
+
 #viewport {
   flex: 1;
   min-height: 0;
