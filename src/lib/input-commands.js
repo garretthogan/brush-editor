@@ -140,10 +140,26 @@ export function createInputHandler(ctx) {
     }
   })
 
-  ctx.viewport.addEventListener('click', (e) => {
+  function handleSelect(e) {
+    if (e.button !== 0) return
+    const canvas = ctx.canvas ?? ctx.viewport
+    if (canvas && !canvas.contains(e.target)) return
     const brush = ctx.pickBrush(e)
-    new SelectBrushCommand(brush).execute(ctx)
-  })
+    const lightEntry = ctx.pickLight ? ctx.pickLight(e) : null
+    if (ctx.reportPick) ctx.reportPick({ brush, lightEntry, target: e.target })
+    if (brush) {
+      new SelectBrushCommand(brush).execute(ctx)
+      if (ctx.selectLight) ctx.selectLight(null)
+    } else if (lightEntry && ctx.selectLight) {
+      ctx.selectBrush(null)
+      ctx.selectLight(lightEntry)
+    } else {
+      ctx.selectBrush(null)
+      if (ctx.selectLight) ctx.selectLight(null)
+    }
+  }
+
+  document.addEventListener('pointerdown', handleSelect, true)
 
   document.addEventListener('keydown', (e) => {
     const active = document.activeElement
@@ -158,13 +174,23 @@ export function createInputHandler(ctx) {
       new UndoCommand().execute(ctx)
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault()
-      new DeleteSelectedCommand().execute(ctx)
+      if (ctx.selectedLight && ctx.deleteSelectedLight) {
+        ctx.deleteSelectedLight()
+      } else {
+        new DeleteSelectedCommand().execute(ctx)
+      }
     }
   })
 
   return {
     /** For toolbar buttons that invoke commands */
     setTransformMode: (mode) => new SetTransformModeCommand(mode).execute(ctx),
-    deleteSelected: () => new DeleteSelectedCommand().execute(ctx),
+    deleteSelected: () => {
+      if (ctx.selectedLight && ctx.deleteSelectedLight) {
+        ctx.deleteSelectedLight()
+      } else {
+        new DeleteSelectedCommand().execute(ctx)
+      }
+    },
   }
 }

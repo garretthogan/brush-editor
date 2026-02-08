@@ -45,6 +45,7 @@ function loadTextureForSpawn() {
 
 // --- Scene Setup ---
 const viewport = document.getElementById('viewport')
+let pickRectElement = viewport
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0x1a1a1a)
 
@@ -65,6 +66,28 @@ renderer.outputColorSpace = THREE.SRGBColorSpace
 renderer.toneMapping = THREE.ACESFilmicToneMapping
 renderer.toneMappingExposure = 0.5
 viewport.appendChild(renderer.domElement)
+pickRectElement = renderer.domElement
+
+const pickDebug = document.getElementById('pick-debug')
+function reportPick({ brush, lightEntry, target }) {
+  if (!pickDebug) return
+  const targetLabel = target
+    ? `${target.tagName.toLowerCase()}${target.id ? `#${target.id}` : ''}`
+    : 'none'
+  const brushLabel = brush
+    ? `${brush.userData?.type ?? 'brush'}:${brush.userData?.id ?? 'no-id'}`
+    : 'none'
+  const lightLabel = lightEntry ? `${lightEntry.type}` : 'none'
+  const gizmoLabel = transformControls?.object ? 'attached' : 'detached'
+  const gizmoVisible = transformControlsHelper?.visible ? 'visible' : 'hidden'
+  const gizmoEnabled = transformControls?.enabled ? 'enabled' : 'disabled'
+  pickDebug.textContent =
+    `target: ${targetLabel}\n` +
+    `brush: ${brushLabel}\n` +
+    `light: ${lightLabel}\n` +
+    `gizmo: ${gizmoLabel} / ${gizmoEnabled} / ${gizmoVisible}`
+  pickDebug.classList.remove('hidden')
+}
 
 // Lighting
 const ambient = new THREE.AmbientLight(0x404040, 1)
@@ -88,12 +111,32 @@ orbitControls.dampingFactor = 0.05
 
 const transformControls = new TransformControls(camera, renderer.domElement)
 transformControls.setSize(0.4)
-scene.add(transformControls.getHelper()) // Helper must be in scene for gizmo to render
+transformControls.enabled = false
+const transformControlsHelper = transformControls.getHelper()
+transformControlsHelper.visible = false
+transformControlsHelper.traverse((child) => {
+  child.frustumCulled = false
+  if (child.material) {
+    child.material.depthTest = false
+  }
+  child.renderOrder = 1000
+})
+scene.add(transformControlsHelper) // Helper must be in scene for gizmo to render
 
 // --- Brush State ---
 const brushes = []
 let selectedBrush = null
 let currentTool = 'select'
+
+// --- Light State ---
+const lights = [] // { light, helper, type: 'point'|'spot'|'directional'|'ambient' }
+let selectedLight = null
+
+const LIGHT_HELPER_COLOR = 0xffdd88
+const POINT_LIGHT_HELPER_RADIUS = 0.2
+const SPOT_LIGHT_CONE_LENGTH = 1.2
+const SPOT_LIGHT_CONE_RADIUS = 0.35
+const DIRECTIONAL_LIGHT_DISC_SIZE = 0.4
 
 // --- Undo Stack ---
 const MAX_UNDO = 50
@@ -241,6 +284,172 @@ function addBrushMesh(size, position) {
   return mesh
 }
 
+// --- Light helpers (visual only; do not cast or receive shadow) ---
+function createPointLightHelper(light) {
+  const geometry = new THREE.SphereGeometry(POINT_LIGHT_HELPER_RADIUS, 12, 8)
+  const material = new THREE.MeshBasicMaterial({
+    color: light.color.getHex ? light.color.getHex() : LIGHT_HELPER_COLOR,
+  })
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  return mesh
+}
+
+function createSpotLightHelper(light) {
+  const geometry = new THREE.CylinderGeometry(0, SPOT_LIGHT_CONE_RADIUS, SPOT_LIGHT_CONE_LENGTH, 12)
+  const material = new THREE.MeshBasicMaterial({
+    color: light.color.getHex ? light.color.getHex() : LIGHT_HELPER_COLOR,
+  })
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.position.y = -SPOT_LIGHT_CONE_LENGTH / 2
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  return mesh
+}
+
+function createDirectionalLightHelper(light) {
+  const geometry = new THREE.CircleGeometry(DIRECTIONAL_LIGHT_DISC_SIZE, 16)
+  const material = new THREE.MeshBasicMaterial({
+    color: light.color.getHex ? light.color.getHex() : LIGHT_HELPER_COLOR,
+    side: THREE.DoubleSide,
+  })
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  return mesh
+}
+
+function addPointLight() {
+  pushUndoState()
+  const light = new THREE.PointLight(0xffffff, 1, 20, 0.5)
+  light.position.set(0, 5, 0)
+  light.castShadow = false
+  const helper = createPointLightHelper(light)
+  light.add(helper)
+  scene.add(light)
+  const entry = { light, helper, type: 'point' }
+  helper.userData.lightEntry = entry
+  lights.push(entry)
+  selectBrush(null)
+  selectLight(entry)
+  setCurrentTool('translate')
+  setTransformMode('translate')
+}
+
+function addSpotLight() {
+  pushUndoState()
+  const light = new THREE.SpotLight(0xffffff, 2, 25, Math.PI / 6, 0.5, 1)
+  light.position.set(0, 8, 4)
+  light.target.position.set(0, 0, 0)
+  scene.add(light.target)
+  light.castShadow = false
+  const helper = createSpotLightHelper(light)
+  light.add(helper)
+  scene.add(light)
+  const entry = { light, helper, type: 'spot' }
+  helper.userData.lightEntry = entry
+  lights.push(entry)
+  selectBrush(null)
+  selectLight(entry)
+  setCurrentTool('translate')
+  setTransformMode('translate')
+}
+
+function addDirectionalLight() {
+  pushUndoState()
+  const light = new THREE.DirectionalLight(0xffffff, 1)
+  light.position.set(5, 10, 5)
+  light.target.position.set(0, 0, 0)
+  scene.add(light.target)
+  light.castShadow = false
+  const helper = createDirectionalLightHelper(light)
+  light.add(helper)
+  scene.add(light)
+  const entry = { light, helper, type: 'directional' }
+  helper.userData.lightEntry = entry
+  lights.push(entry)
+  selectBrush(null)
+  selectLight(entry)
+  setCurrentTool('translate')
+  setTransformMode('translate')
+}
+
+function addAmbientLight() {
+  pushUndoState()
+  const light = new THREE.AmbientLight(0x404040, 0.5)
+  scene.add(light)
+  const entry = { light, helper: null, type: 'ambient' }
+  lights.push(entry)
+  selectBrush(null)
+  selectLight(entry)
+}
+
+function getLightHelpers() {
+  return lights.filter((e) => e.helper).map((e) => e.helper)
+}
+
+function pickLight(event) {
+  const rect = pickRectElement.getBoundingClientRect()
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  const helperList = getLightHelpers()
+  const intersects = raycaster.intersectObjects(helperList, true)
+  if (intersects.length === 0) return null
+  const obj = intersects[0].object
+  return obj.userData.lightEntry ?? null
+}
+
+function selectLight(entry) {
+  selectedLight = entry
+  if (!entry && selectedBrush) return
+  if (selectedBrush) {
+    removeOutline(selectedBrush)
+    selectedBrush = null
+    transformControls.detach()
+  }
+  if (entry) {
+    if (entry.type !== 'ambient') {
+      transformControls.enabled = true
+      transformControls.attach(entry.light)
+      transformControlsHelper.visible = true
+    } else {
+      transformControls.detach()
+      transformControls.enabled = false
+      transformControlsHelper.visible = false
+    }
+  } else {
+    transformControls.detach()
+    transformControls.enabled = false
+    transformControlsHelper.visible = false
+  }
+}
+
+function deleteSelectedLight() {
+  if (!selectedLight) return
+  pushUndoState()
+  const entry = selectedLight
+  const idx = lights.indexOf(entry)
+  if (idx !== -1) lights.splice(idx, 1)
+  if (entry.light.target) scene.remove(entry.light.target)
+  scene.remove(entry.light)
+  if (entry.helper) {
+    entry.helper.geometry.dispose()
+    entry.helper.material.dispose()
+  }
+  selectLight(null)
+}
+
+function updateSpotLightHelpers() {
+  lights.forEach((entry) => {
+    if (entry.type !== 'spot' || !entry.helper) return
+    const light = entry.light
+    entry.helper.lookAt(light.target.position)
+    entry.helper.rotateX(-Math.PI / 2)
+  })
+}
+
 function getMazeControls() {
   return {
     cols: parseInt(document.getElementById('maze-cols').value, 10),
@@ -353,11 +562,19 @@ function removeOutline(mesh) {
 function selectBrush(mesh) {
   removeOutline(selectedBrush)
   selectedBrush = mesh
+  if (selectedLight) {
+    selectedLight = null
+    transformControls.detach()
+  }
   if (mesh) {
     addOutline(mesh)
+    transformControls.enabled = true
     transformControls.attach(mesh)
+    transformControlsHelper.visible = true
   } else {
     transformControls.detach()
+    transformControls.enabled = false
+    transformControlsHelper.visible = false
   }
 }
 
@@ -403,20 +620,45 @@ function deleteSelected() {
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 
+function findBrushFromObject(obj) {
+  let current = obj
+  while (current) {
+    if (current.userData?.isBrush) return current
+    current = current.parent
+  }
+  return null
+}
+
 function pickBrush(event) {
-  const rect = viewport.getBoundingClientRect()
+  const rect = pickRectElement.getBoundingClientRect()
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
-  const intersects = raycaster.intersectObjects(brushes)
-  return intersects.length > 0 ? intersects[0].object : null
+  const intersects = raycaster.intersectObjects(brushes, true)
+  for (const hit of intersects) {
+    const brush = findBrushFromObject(hit.object)
+    if (brush) return brush
+  }
+  if (selectedBrush && transformControls.enabled) {
+    const gizmoHits = raycaster.intersectObjects([transformControlsHelper], true)
+    if (gizmoHits.length > 0) return selectedBrush
+  }
+  return null
 }
+
 
 // Mode switching
 function setTransformMode(mode) {
   transformControls.setMode(mode)
   if (selectedBrush) {
+    transformControls.enabled = true
     transformControls.attach(selectedBrush)
+  } else if (selectedLight && selectedLight.type !== 'ambient') {
+    transformControls.enabled = true
+    transformControls.attach(selectedLight.light)
+  } else {
+    transformControls.detach()
+    transformControls.enabled = false
   }
 }
 
@@ -728,6 +970,7 @@ updateCenterRoomVisibility()
 // --- Input (command pattern) ---
 const inputHandler = createInputHandler({
   viewport,
+  canvas: renderer.domElement,
   camera,
   brushes,
   get selectedBrush() {
@@ -745,6 +988,13 @@ const inputHandler = createInputHandler({
   orbitControls,
   bakeScaleIntoGeometry,
   pickBrush,
+  pickLight,
+  reportPick,
+  get selectedLight() {
+    return selectedLight
+  },
+  selectLight,
+  deleteSelectedLight,
 })
 
 // --- Texture dropdown ---
@@ -763,6 +1013,10 @@ TEXTURE_POOL.forEach(({ palette, file }, i) => {
 // --- Toolbar ---
 document.getElementById('btn-add-box').addEventListener('click', addBoxBrush)
 document.getElementById('btn-add-cylinder').addEventListener('click', addCylinderBrush)
+document.getElementById('btn-add-point-light')?.addEventListener('click', addPointLight)
+document.getElementById('btn-add-spot-light')?.addEventListener('click', addSpotLight)
+document.getElementById('btn-add-directional-light')?.addEventListener('click', addDirectionalLight)
+document.getElementById('btn-add-ambient-light')?.addEventListener('click', addAmbientLight)
 document.getElementById('btn-move').addEventListener('click', () => inputHandler.setTransformMode('translate'))
 document.getElementById('btn-rotate').addEventListener('click', () => inputHandler.setTransformMode('rotate'))
 document.getElementById('btn-scale').addEventListener('click', () => inputHandler.setTransformMode('scale'))
@@ -785,6 +1039,8 @@ resizeObserver.observe(viewport)
 function animate() {
   requestAnimationFrame(animate)
   orbitControls.update()
+  transformControlsHelper.updateMatrixWorld()
+  updateSpotLightHelpers()
   renderer.render(scene, camera)
 }
 animate()

@@ -10,7 +10,7 @@
     <div id="app">
       <div id="header">
         <div id="mode-tabs">
-          <button id="tab-brush" class="tab active">Brush Editor</button>
+          <button id="tab-brush" class="tab active">Object Editor</button>
           <button id="tab-maze" class="tab">Maze Generator</button>
           <button id="tab-skybox" class="tab">Skybox Editor</button>
         </div>
@@ -19,7 +19,9 @@
           <button id="btn-load" title="Load Level / Import GLB">Load</button>
         </div>
       </div>
-      <div id="viewport"></div>
+      <div id="viewport">
+        <div id="pick-debug" class="debug-overlay hidden"></div>
+      </div>
       <div id="controls-area">
         <div id="brush-controls" class="mode-panel">
           <div class="panel collapsible">
@@ -42,6 +44,20 @@
                 <button id="btn-rotate" title="Rotate Brush">Rotate</button>
                 <button id="btn-scale" title="Scale Brush">Scale</button>
                 <button id="btn-delete" title="Delete Selected">Delete</button>
+              </div>
+            </div>
+          </div>
+          <div class="panel collapsible">
+            <button class="panel-header" data-panel="light-tools">
+              <span class="panel-chevron">▼</span>
+              Lights
+            </button>
+            <div class="panel-content" id="panel-light-tools">
+              <div class="add-lights">
+                <button id="btn-add-point-light" title="Add Point Light">Point Light</button>
+                <button id="btn-add-spot-light" title="Add Spot Light">Spot Light</button>
+                <button id="btn-add-directional-light" title="Add Directional Light">Directional</button>
+                <button id="btn-add-ambient-light" title="Add Ambient Light">Ambient</button>
               </div>
             </div>
           </div>
