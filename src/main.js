@@ -9,7 +9,7 @@ const GRID_COLOR = 0x333333
 const OUTLINE_COLOR = 0xff8800
 
 const textureLoader = new THREE.TextureLoader()
-const defaultTexture = textureLoader.load('/textures/Dark/texture_05.png')
+const defaultTexture = textureLoader.load(`${import.meta.env.BASE_URL}textures/Dark/texture_05.png`)
 defaultTexture.wrapS = defaultTexture.wrapT = THREE.RepeatWrapping
 
 // --- Scene Setup ---
