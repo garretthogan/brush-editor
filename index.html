@@ -59,6 +59,81 @@
                 <button id="btn-add-directional-light" title="Add Directional Light">Directional</button>
                 <button id="btn-add-ambient-light" title="Add Ambient Light">Ambient</button>
               </div>
+              <div class="tool-divider" role="separator"></div>
+              <div id="light-controls" class="light-controls">
+                <div id="light-controls-empty" class="light-controls-empty">Select a light to edit</div>
+                <div id="light-controls-point" class="light-controls-group hidden">
+                  <div class="light-controls-title">Point Light</div>
+                  <div class="control-row">
+                    <label for="point-light-color">Color</label>
+                    <input type="color" id="point-light-color" value="#ffffff" />
+                  </div>
+                  <div class="control-row">
+                    <label for="point-light-intensity">Intensity</label>
+                    <input type="range" id="point-light-intensity" min="0" max="10" step="0.1" value="1" />
+                    <span id="point-light-intensity-value">1</span>
+                  </div>
+                  <div class="control-row">
+                    <label for="point-light-radius">Radius</label>
+                    <input type="range" id="point-light-radius" min="0" max="100" step="0.5" value="20" />
+                    <span id="point-light-radius-value">20</span>
+                  </div>
+                </div>
+                <div id="light-controls-spot" class="light-controls-group hidden">
+                  <div class="light-controls-title">Spot Light</div>
+                  <div class="control-row">
+                    <label for="spot-light-color">Color</label>
+                    <input type="color" id="spot-light-color" value="#ffffff" />
+                  </div>
+                  <div class="control-row">
+                    <label for="spot-light-intensity">Intensity</label>
+                    <input type="range" id="spot-light-intensity" min="0" max="10" step="0.1" value="2" />
+                    <span id="spot-light-intensity-value">2</span>
+                  </div>
+                  <div class="control-row">
+                    <label for="spot-light-radius">Radius</label>
+                    <input type="range" id="spot-light-radius" min="0" max="100" step="0.5" value="25" />
+                    <span id="spot-light-radius-value">25</span>
+                  </div>
+                  <div class="control-row">
+                    <label for="spot-light-angle">Cone Angle</label>
+                    <input type="range" id="spot-light-angle" min="5" max="90" step="1" value="30" />
+                    <span id="spot-light-angle-value">30</span>
+                  </div>
+                </div>
+                <div id="light-controls-ambient" class="light-controls-group hidden">
+                  <div class="light-controls-title">Ambient Light</div>
+                  <div class="control-row">
+                    <label for="ambient-light-color">Color</label>
+                    <input type="color" id="ambient-light-color" value="#ffffff" />
+                  </div>
+                  <div class="control-row">
+                    <label for="ambient-light-intensity">Intensity</label>
+                    <input type="range" id="ambient-light-intensity" min="0" max="5" step="0.1" value="0.5" />
+                    <span id="ambient-light-intensity-value">0.5</span>
+                  </div>
+                </div>
+                <div id="light-controls-directional" class="light-controls-group hidden">
+                  <div class="light-controls-title">Directional Light</div>
+                  <div class="control-row">
+                    <label for="directional-light-color">Color</label>
+                    <input type="color" id="directional-light-color" value="#ffffff" />
+                  </div>
+                  <div class="control-row">
+                    <label for="directional-light-intensity">Intensity</label>
+                    <input type="range" id="directional-light-intensity" min="0" max="10" step="0.1" value="1" />
+                    <span id="directional-light-intensity-value">1</span>
+                  </div>
+                  <div class="control-row">
+                    <label>Direction</label>
+                    <div class="direction-inputs">
+                      <input type="number" id="directional-light-dir-x" step="0.1" value="0" />
+                      <input type="number" id="directional-light-dir-y" step="0.1" value="-1" />
+                      <input type="number" id="directional-light-dir-z" step="0.1" value="0" />
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

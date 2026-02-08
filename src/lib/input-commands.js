@@ -121,6 +121,7 @@ function createCloneModifierCapturer(viewport) {
  */
 export function createInputHandler(ctx) {
   const wasCloneModifierHeld = createCloneModifierCapturer(ctx.viewport)
+  let suppressSelectOnce = false
 
   ctx.transformControls.addEventListener('dragging-changed', (e) => {
     if (e.value) {
@@ -140,28 +141,44 @@ export function createInputHandler(ctx) {
     }
   })
 
+  ctx.transformControls.addEventListener('mouseDown', () => {
+    const canvas = ctx.canvas ?? ctx.viewport
+    if (!canvas) return
+    suppressSelectOnce = true
+  })
+
+  document.addEventListener('pointerup', () => {
+    suppressSelectOnce = false
+  }, true)
+
+  document.addEventListener('pointercancel', () => {
+    suppressSelectOnce = false
+  }, true)
+
   function handleSelect(e) {
     if (e.button !== 0) return
     const canvas = ctx.canvas ?? ctx.viewport
     if (canvas && !canvas.contains(e.target)) return
-    const brush = ctx.pickBrush(e)
+    if (suppressSelectOnce) {
+      suppressSelectOnce = false
+      return
+    }
     const lightEntry = ctx.pickLight ? ctx.pickLight(e) : null
+    const brush = ctx.pickBrush(e)
     if (ctx.reportPick) ctx.reportPick({ brush, lightEntry, target: e.target })
-    if (brush) {
-      new SelectBrushCommand(brush).execute(ctx)
-      if (ctx.selectLight) ctx.selectLight(null)
-    } else if (lightEntry && ctx.selectLight) {
+    if (lightEntry && ctx.selectLight) {
       ctx.selectBrush(null)
       ctx.selectLight(lightEntry)
-    } else if (ctx.isGizmoHit && ctx.isGizmoHit(e)) {
-      return
+    } else if (brush) {
+      new SelectBrushCommand(brush).execute(ctx)
+      if (ctx.selectLight) ctx.selectLight(null)
     } else {
       ctx.selectBrush(null)
       if (ctx.selectLight) ctx.selectLight(null)
     }
   }
 
-  document.addEventListener('pointerdown', handleSelect, true)
+  document.addEventListener('pointerdown', handleSelect)
 
   document.addEventListener('keydown', (e) => {
     const active = document.activeElement

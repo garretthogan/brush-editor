@@ -134,9 +134,12 @@ let selectedLight = null
 
 const LIGHT_HELPER_COLOR = 0xffdd88
 const POINT_LIGHT_HELPER_RADIUS = 0.2
+const AMBIENT_LIGHT_HELPER_SIZE = 0.35
 const SPOT_LIGHT_CONE_LENGTH = 1.2
 const SPOT_LIGHT_CONE_RADIUS = 0.35
-const DIRECTIONAL_LIGHT_DISC_SIZE = 0.4
+const DIRECTIONAL_LIGHT_HELPER_RADIUS = 0.18
+const DIRECTIONAL_LIGHT_HELPER_CONE_LENGTH = 0.9
+const DIRECTIONAL_LIGHT_HELPER_CONE_RADIUS = 0.25
 
 // --- Undo Stack ---
 const MAX_UNDO = 50
@@ -309,7 +312,26 @@ function createSpotLightHelper(light) {
 }
 
 function createDirectionalLightHelper(light) {
-  const geometry = new THREE.CircleGeometry(DIRECTIONAL_LIGHT_DISC_SIZE, 16)
+  const group = new THREE.Group()
+  const sphereGeom = new THREE.SphereGeometry(DIRECTIONAL_LIGHT_HELPER_RADIUS, 12, 8)
+  const coneGeom = new THREE.CylinderGeometry(0, DIRECTIONAL_LIGHT_HELPER_CONE_RADIUS, DIRECTIONAL_LIGHT_HELPER_CONE_LENGTH, 12)
+  const material = new THREE.MeshBasicMaterial({
+    color: light.color.getHex ? light.color.getHex() : LIGHT_HELPER_COLOR,
+  })
+  const sphere = new THREE.Mesh(sphereGeom, material)
+  const cone = new THREE.Mesh(coneGeom, material)
+  cone.position.y = -DIRECTIONAL_LIGHT_HELPER_CONE_LENGTH / 2
+  sphere.castShadow = false
+  sphere.receiveShadow = false
+  cone.castShadow = false
+  cone.receiveShadow = false
+  group.add(sphere)
+  group.add(cone)
+  return group
+}
+
+function createAmbientLightHelper(light) {
+  const geometry = new THREE.PlaneGeometry(AMBIENT_LIGHT_HELPER_SIZE, AMBIENT_LIGHT_HELPER_SIZE)
   const material = new THREE.MeshBasicMaterial({
     color: light.color.getHex ? light.color.getHex() : LIGHT_HELPER_COLOR,
     side: THREE.DoubleSide,
@@ -318,6 +340,15 @@ function createDirectionalLightHelper(light) {
   mesh.castShadow = false
   mesh.receiveShadow = false
   return mesh
+}
+
+function updateLightHelperColor(entry) {
+  if (!entry?.helper) return
+  entry.helper.traverse((child) => {
+    if (child.material?.color) {
+      child.material.color.copy(entry.light.color)
+    }
+  })
 }
 
 function addPointLight() {
@@ -378,8 +409,12 @@ function addDirectionalLight() {
 function addAmbientLight() {
   pushUndoState()
   const light = new THREE.AmbientLight(0x404040, 0.5)
+  light.position.set(0, 3, 0)
+  const helper = createAmbientLightHelper(light)
+  light.add(helper)
   scene.add(light)
-  const entry = { light, helper: null, type: 'ambient' }
+  const entry = { light, helper, type: 'ambient' }
+  helper.userData.lightEntry = entry
   lights.push(entry)
   selectBrush(null)
   selectLight(entry)
@@ -403,7 +438,10 @@ function pickLight(event) {
 
 function selectLight(entry) {
   selectedLight = entry
-  if (!entry && selectedBrush) return
+  if (!entry && selectedBrush) {
+    updateLightControls()
+    return
+  }
   if (selectedBrush) {
     removeOutline(selectedBrush)
     selectedBrush = null
@@ -426,6 +464,74 @@ function selectLight(entry) {
     transformControls.enabled = false
     transformControlsHelper.visible = false
   }
+  updateLightControls()
+}
+
+function updateLightControls() {
+  const empty = document.getElementById('light-controls-empty')
+  const groupPoint = document.getElementById('light-controls-point')
+  const groupSpot = document.getElementById('light-controls-spot')
+  const groupAmbient = document.getElementById('light-controls-ambient')
+  const groupDirectional = document.getElementById('light-controls-directional')
+  if (!empty || !groupPoint || !groupSpot || !groupAmbient || !groupDirectional) return
+
+  const groups = [groupPoint, groupSpot, groupAmbient, groupDirectional]
+  const hideAll = () => groups.forEach((g) => g.classList.add('hidden'))
+  const showGroup = (group) => {
+    hideAll()
+    empty.classList.add('hidden')
+    group.classList.remove('hidden')
+  }
+
+  if (!selectedLight) {
+    hideAll()
+    empty.classList.remove('hidden')
+    return
+  }
+
+  const light = selectedLight.light
+  const colorHex = `#${light.color.getHexString()}`
+
+  if (selectedLight.type === 'point') {
+    showGroup(groupPoint)
+    document.getElementById('point-light-color').value = colorHex
+    const intensity = light.intensity ?? 1
+    const radius = light.distance ?? 0
+    document.getElementById('point-light-intensity').value = intensity
+    document.getElementById('point-light-intensity-value').textContent = intensity
+    document.getElementById('point-light-radius').value = radius
+    document.getElementById('point-light-radius-value').textContent = radius
+  } else if (selectedLight.type === 'spot') {
+    showGroup(groupSpot)
+    document.getElementById('spot-light-color').value = colorHex
+    const intensity = light.intensity ?? 1
+    const radius = light.distance ?? 0
+    const angleDeg = Math.round(THREE.MathUtils.radToDeg(light.angle ?? Math.PI / 6))
+    document.getElementById('spot-light-intensity').value = intensity
+    document.getElementById('spot-light-intensity-value').textContent = intensity
+    document.getElementById('spot-light-radius').value = radius
+    document.getElementById('spot-light-radius-value').textContent = radius
+    document.getElementById('spot-light-angle').value = angleDeg
+    document.getElementById('spot-light-angle-value').textContent = angleDeg
+  } else if (selectedLight.type === 'ambient') {
+    showGroup(groupAmbient)
+    document.getElementById('ambient-light-color').value = colorHex
+    const intensity = light.intensity ?? 0.5
+    document.getElementById('ambient-light-intensity').value = intensity
+    document.getElementById('ambient-light-intensity-value').textContent = intensity
+  } else if (selectedLight.type === 'directional') {
+    showGroup(groupDirectional)
+    document.getElementById('directional-light-color').value = colorHex
+    const intensity = light.intensity ?? 1
+    document.getElementById('directional-light-intensity').value = intensity
+    document.getElementById('directional-light-intensity-value').textContent = intensity
+    const dir = light.target.position.clone().sub(light.position)
+    if (dir.lengthSq() === 0) dir.set(0, -1, 0)
+    dir.normalize()
+    document.getElementById('directional-light-dir-x').value = dir.x.toFixed(2)
+    document.getElementById('directional-light-dir-y').value = dir.y.toFixed(2)
+    document.getElementById('directional-light-dir-z').value = dir.z.toFixed(2)
+  }
 }
 
 function deleteSelectedLight() {
@@ -437,8 +543,10 @@ function deleteSelectedLight() {
   if (entry.light.target) scene.remove(entry.light.target)
   scene.remove(entry.light)
   if (entry.helper) {
-    entry.helper.geometry.dispose()
-    entry.helper.material.dispose()
+    entry.helper.traverse((child) => {
+      child.geometry?.dispose()
+      if (child.material && child.material.dispose) child.material.dispose()
+    })
   }
   selectLight(null)
 }
@@ -446,6 +554,15 @@ function deleteSelectedLight() {
 function updateSpotLightHelpers() {
   lights.forEach((entry) => {
     if (entry.type !== 'spot' || !entry.helper) return
+    const light = entry.light
+    entry.helper.lookAt(light.target.position)
+    entry.helper.rotateX(-Math.PI / 2)
+  })
+}
+
+function updateDirectionalLightHelpers() {
+  lights.forEach((entry) => {
+    if (entry.type !== 'directional' || !entry.helper) return
     const light = entry.light
     entry.helper.lookAt(light.target.position)
     entry.helper.rotateX(-Math.PI / 2)
@@ -1006,6 +1123,7 @@ const inputHandler = createInputHandler({
   selectLight,
   deleteSelectedLight,
 })
+updateLightControls()
 
 // --- Texture dropdown ---
 const textureSelect = document.getElementById('texture-select')
@@ -1019,6 +1137,89 @@ TEXTURE_POOL.forEach(({ palette, file }, i) => {
   opt.textContent = `${palette} / ${file.replace('.png', '')}`
   textureSelect.appendChild(opt)
 })
+
+// --- Light controls ---
+function applyDirectionalDirectionFromInputs() {
+  if (!selectedLight || selectedLight.type !== 'directional') return
+  const x = parseFloat(document.getElementById('directional-light-dir-x').value)
+  const y = parseFloat(document.getElementById('directional-light-dir-y').value)
+  const z = parseFloat(document.getElementById('directional-light-dir-z').value)
+  const dir = new THREE.Vector3(x, y, z)
+  if (dir.lengthSq() === 0) dir.set(0, -1, 0)
+  dir.normalize()
+  selectedLight.light.target.position.copy(selectedLight.light.position).add(dir)
+  updateDirectionalLightHelpers()
+}
+
+document.getElementById('point-light-color').addEventListener('input', (e) => {
+  if (!selectedLight || selectedLight.type !== 'point') return
+  selectedLight.light.color.set(e.target.value)
+  updateLightHelperColor(selectedLight)
+})
+document.getElementById('point-light-intensity').addEventListener('input', (e) => {
+  if (!selectedLight || selectedLight.type !== 'point') return
+  const value = parseFloat(e.target.value)
+  selectedLight.light.intensity = value
+  document.getElementById('point-light-intensity-value').textContent = value
+})
+document.getElementById('point-light-radius').addEventListener('input', (e) => {
+  if (!selectedLight || selectedLight.type !== 'point') return
+  const value = parseFloat(e.target.value)
+  selectedLight.light.distance = value
+  document.getElementById('point-light-radius-value').textContent = value
+})
+
+document.getElementById('spot-light-color').addEventListener('input', (e) => {
+  if (!selectedLight || selectedLight.type !== 'spot') return
+  selectedLight.light.color.set(e.target.value)
+  updateLightHelperColor(selectedLight)
+})
+document.getElementById('spot-light-intensity').addEventListener('input', (e) => {
+  if (!selectedLight || selectedLight.type !== 'spot') return
+  const value = parseFloat(e.target.value)
+  selectedLight.light.intensity = value
+  document.getElementById('spot-light-intensity-value').textContent = value
+})
+document.getElementById('spot-light-radius').addEventListener('input', (e) => {
+  if (!selectedLight || selectedLight.type !== 'spot') return
+  const value = parseFloat(e.target.value)
+  selectedLight.light.distance = value
+  document.getElementById('spot-light-radius-value').textContent = value
+})
+document.getElementById('spot-light-angle').addEventListener('input', (e) => {
+  if (!selectedLight || selectedLight.type !== 'spot') return
+  const value = parseFloat(e.target.value)
+  selectedLight.light.angle = THREE.MathUtils.degToRad(value)
+  document.getElementById('spot-light-angle-value').textContent = value
+  updateSpotLightHelpers()
+})
+
+document.getElementById('ambient-light-color').addEventListener('input', (e) => {
+  if (!selectedLight || selectedLight.type !== 'ambient') return
+  selectedLight.light.color.set(e.target.value)
+  updateLightHelperColor(selectedLight)
+})
+document.getElementById('ambient-light-intensity').addEventListener('input', (e) => {
+  if (!selectedLight || selectedLight.type !== 'ambient') return
+  const value = parseFloat(e.target.value)
+  selectedLight.light.intensity = value
+  document.getElementById('ambient-light-intensity-value').textContent = value
+})
+
+document.getElementById('directional-light-color').addEventListener('input', (e) => {
+  if (!selectedLight || selectedLight.type !== 'directional') return
+  selectedLight.light.color.set(e.target.value)
+  updateLightHelperColor(selectedLight)
+})
+document.getElementById('directional-light-intensity').addEventListener('input', (e) => {
+  if (!selectedLight || selectedLight.type !== 'directional') return
+  const value = parseFloat(e.target.value)
+  selectedLight.light.intensity = value
+  document.getElementById('directional-light-intensity-value').textContent = value
+})
+document.getElementById('directional-light-dir-x').addEventListener('input', applyDirectionalDirectionFromInputs)
+document.getElementById('directional-light-dir-y').addEventListener('input', applyDirectionalDirectionFromInputs)
+document.getElementById('directional-light-dir-z').addEventListener('input', applyDirectionalDirectionFromInputs)
 
 // --- Toolbar ---
 document.getElementById('btn-add-box').addEventListener('click', addBoxBrush)
@@ -1051,6 +1252,7 @@ function animate() {
   orbitControls.update()
   transformControlsHelper.updateMatrixWorld()
   updateSpotLightHelpers()
+  updateDirectionalLightHelpers()
   renderer.render(scene, camera)
 }
 animate()
