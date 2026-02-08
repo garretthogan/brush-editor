@@ -153,6 +153,8 @@ export function createInputHandler(ctx) {
     } else if (lightEntry && ctx.selectLight) {
       ctx.selectBrush(null)
       ctx.selectLight(lightEntry)
+    } else if (ctx.isGizmoHit && ctx.isGizmoHit(e)) {
+      return
     } else {
       ctx.selectBrush(null)
       if (ctx.selectLight) ctx.selectLight(null)

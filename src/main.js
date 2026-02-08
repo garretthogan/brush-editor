@@ -411,6 +411,8 @@ function selectLight(entry) {
   }
   if (entry) {
     if (entry.type !== 'ambient') {
+      const mode = currentTool === 'scale' ? 'translate' : currentTool
+      transformControls.setMode(mode)
       transformControls.enabled = true
       transformControls.attach(entry.light)
       transformControlsHelper.visible = true
@@ -639,12 +641,19 @@ function pickBrush(event) {
     const brush = findBrushFromObject(hit.object)
     if (brush) return brush
   }
-  if (selectedBrush && transformControls.enabled) {
-    const gizmoHits = raycaster.intersectObjects([transformControlsHelper], true)
-    if (gizmoHits.length > 0) return selectedBrush
-  }
   return null
 }
+
+function isGizmoHit(event) {
+  if (!transformControls.enabled || !transformControlsHelper.visible) return false
+  const rect = pickRectElement.getBoundingClientRect()
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  const hits = raycaster.intersectObjects([transformControlsHelper], true)
+  return hits.length > 0
+}
+
 
 
 // Mode switching
@@ -988,6 +997,7 @@ const inputHandler = createInputHandler({
   orbitControls,
   bakeScaleIntoGeometry,
   pickBrush,
+  isGizmoHit,
   pickLight,
   reportPick,
   get selectedLight() {
