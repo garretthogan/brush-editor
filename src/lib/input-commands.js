@@ -170,6 +170,11 @@ export function createInputHandler(ctx) {
       ctx.selectBrush(null)
       ctx.selectLight(lightEntry)
     } else if (brush) {
+      if (brush.userData?.isArenaPreview && ctx.getEditorMode && ctx.getEditorMode() !== 'arena') {
+        ctx.selectBrush(null)
+        if (ctx.selectLight) ctx.selectLight(null)
+        return
+      }
       new SelectBrushCommand(brush).execute(ctx)
       if (ctx.selectLight) ctx.selectLight(null)
     } else {

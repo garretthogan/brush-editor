@@ -25,6 +25,8 @@ const TEXTURE_POOL = [
 
 const textureLoader = new THREE.TextureLoader()
 const baseUrl = import.meta.env.BASE_URL
+const ARENA_TEXTURE_URL = `${baseUrl}textures/Light/texture_02.png`
+let arenaTextureCache = null
 
 function getTextureUrl(index) {
   const { palette, file } = TEXTURE_POOL[index]
@@ -42,6 +44,25 @@ function loadTextureForSpawn() {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping
   tex.colorSpace = THREE.SRGBColorSpace
   return tex
+}
+
+function getArenaTexture() {
+  if (arenaTextureCache) return arenaTextureCache
+  const tex = textureLoader.load(ARENA_TEXTURE_URL)
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  tex.colorSpace = THREE.SRGBColorSpace
+  arenaTextureCache = tex
+  return tex
+}
+
+function applyArenaTexture(mesh) {
+  if (!mesh?.material) return
+  const tex = getArenaTexture()
+  if (mesh.material.map && mesh.material.map !== tex) {
+    mesh.material.map.dispose()
+  }
+  mesh.material.map = tex
+  mesh.material.needsUpdate = true
 }
 
 function clamp(value, min, max) {
@@ -113,6 +134,9 @@ scene.add(grid)
 const orbitControls = new OrbitControls(camera, renderer.domElement)
 orbitControls.enableDamping = true
 orbitControls.dampingFactor = 0.05
+orbitControls.autoRotate = false
+orbitControls.autoRotateSpeed = 0
+orbitControls.enableZoom = false
 
 const transformControls = new TransformControls(camera, renderer.domElement)
 transformControls.setSize(0.4)
@@ -726,6 +750,7 @@ function arenaGridToMeshes(grid, tileSize, wallHeight, offset = [0, 0, 0], rotat
       const px = rotated.x + offX
       const pz = rotated.z + offZ
       const mesh = addBrushMesh([tileSize, wallHeight, tileSize], [px, wallHeight / 2 + offY, pz])
+      applyArenaTexture(mesh)
       if (rotation) mesh.rotation.copy(rotation)
     }
   }
@@ -773,6 +798,7 @@ function generateMaze() {
 
 function addArenaMarkerCylinder(radius, height, position) {
   const mesh = createCylinderMesh(radius, height, position, brushes.length * 4)
+  applyArenaTexture(mesh)
   mesh.userData.id = crypto.randomUUID()
   mesh.userData.isUserBrush = false
   mesh.castShadow = false
@@ -784,6 +810,7 @@ function addArenaMarkerCylinder(radius, height, position) {
 
 function addArenaCover(size, position) {
   const mesh = createBrushMesh(size, position, brushes.length * 4)
+  applyArenaTexture(mesh)
   mesh.userData.id = crypto.randomUUID()
   mesh.userData.isUserBrush = false
   mesh.castShadow = false
@@ -1054,6 +1081,7 @@ function cloneBrush(mesh) {
 
 function deleteSelected() {
   if (!selectedBrush) return
+  if (selectedBrush.userData?.isArenaPreview) return
   pushUndoState()
   const idx = brushes.indexOf(selectedBrush)
   if (idx !== -1) brushes.splice(idx, 1)
@@ -1561,6 +1589,41 @@ const sunColorInput = document.getElementById('sun-color')
 if (sunColorInput) sunColorInput.addEventListener('input', applySkyParams)
 applySkyParams()
 
+// --- Camera speed control ---
+const cameraSpeedInput = document.getElementById('camera-speed')
+const cameraSpeedValue = document.getElementById('camera-speed-value')
+let cameraZoomSpeed = 0
+function applyCameraSpeed() {
+  if (!cameraSpeedInput) return
+  const value = parseFloat(cameraSpeedInput.value)
+  cameraZoomSpeed = Number.isFinite(value) ? value : 0
+  if (cameraSpeedValue) cameraSpeedValue.textContent = cameraSpeedInput.value
+}
+if (cameraSpeedInput) {
+  cameraSpeedInput.addEventListener('input', applyCameraSpeed)
+  applyCameraSpeed()
+}
+
+renderer.domElement.addEventListener(
+  'wheel',
+  (e) => {
+    if (cameraZoomSpeed === 0) return
+    e.preventDefault()
+    const target = orbitControls.target
+    const toTarget = target.clone().sub(camera.position)
+    const distance = toTarget.length()
+    if (distance <= 0.0001) return
+    const direction = toTarget.normalize()
+    const sign = e.deltaY > 0 ? -1 : 1
+    const step = cameraZoomSpeed * sign
+    const nextDistance = distance - step
+    const clampedStep = nextDistance <= 0.05 ? distance - 0.05 : step
+    camera.position.addScaledVector(direction, clampedStep)
+    orbitControls.update()
+  },
+  { passive: false }
+)
+
 // Show/hide center room size when layout changes
 function updateCenterRoomVisibility() {
   const centerOut = document.getElementById('maze-start-from-center').checked
@@ -1584,6 +1647,9 @@ const inputHandler = createInputHandler({
   setTransformMode,
   setCurrentTool,
   getCurrentTool,
+  getEditorMode() {
+    return editorMode
+  },
   deleteSelected,
   cloneBrush,
   pushUndoState,
