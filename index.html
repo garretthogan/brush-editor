@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GBrush Editor</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="header">
+        <div id="mode-tabs">
+          <button id="tab-brush" class="tab active">Brush Editor</button>
+          <button id="tab-maze" class="tab">Maze Generator</button>
+        </div>
+        <div id="file-buttons">
+          <button id="btn-save" title="Save Level">Save</button>
+          <button id="btn-load" title="Load Level">Load</button>
+        </div>
+      </div>
+      <div id="viewport"></div>
+      <div id="controls-area">
+        <div id="brush-controls" class="mode-panel">
+          <div class="panel collapsible">
+            <button class="panel-header" data-panel="brush-tools">
+              <span class="panel-chevron">▼</span>
+              Brush Tools
+            </button>
+            <div class="panel-content" id="panel-brush-tools">
+              <button id="btn-add-box" title="Add Box Brush">Add Box</button>
+              <button id="btn-select" title="Select Mode">Select</button>
+              <button id="btn-move" title="Move Brush">Move</button>
+              <button id="btn-rotate" title="Rotate Brush">Rotate</button>
+              <button id="btn-scale" title="Scale Brush">Scale</button>
+              <button id="btn-delete" title="Delete Selected">Delete</button>
+            </div>
+          </div>
+        </div>
+        <div id="maze-controls" class="mode-panel hidden">
+          <div class="panel collapsible">
+            <button class="panel-header" data-panel="maze-settings">
+              <span class="panel-chevron">▼</span>
+              Maze Settings
+            </button>
+            <div class="panel-content" id="panel-maze-settings">
+              <button id="btn-generate-maze" class="primary">Generate Maze</button>
+              <div class="control-row">
+                <label for="maze-cols">Columns</label>
+                <input type="range" id="maze-cols" min="5" max="30" step="1" value="10" />
+                <span id="maze-cols-value">10</span>
+              </div>
+              <div class="control-row">
+                <label for="maze-rows">Rows</label>
+                <input type="range" id="maze-rows" min="5" max="30" step="1" value="10" />
+                <span id="maze-rows-value">10</span>
+              </div>
+              <div class="control-row">
+                <label for="maze-space">Space between walls</label>
+                <input type="range" id="maze-space" min="0.5" max="8" step="0.5" value="2" />
+                <span id="maze-space-value">2</span>
+              </div>
+              <div class="control-row">
+                <label for="maze-thickness">Wall thickness</label>
+                <input type="range" id="maze-thickness" min="0.05" max="2" step="0.05" value="0.15" />
+                <span id="maze-thickness-value">0.15</span>
+              </div>
+              <div class="control-row">
+                <label for="maze-height">Wall height</label>
+                <input type="range" id="maze-height" min="0.5" max="12" step="0.5" value="2" />
+                <span id="maze-height-value">2</span>
+              </div>
+              <div class="control-row">
+                <label for="maze-exit-width">Exit width (cells)</label>
+                <input type="range" id="maze-exit-width" min="1" max="9" step="1" value="1" />
+                <span id="maze-exit-width-value">1</span>
+              </div>
+              <div class="control-row" id="center-room-row">
+                <label for="maze-center-size">Center room size</label>
+                <input type="range" id="maze-center-size" min="1" max="6" step="1" value="2" />
+                <span id="maze-center-size-value">2</span>
+              </div>
+              <div class="control-row">
+                <label>Layout</label>
+                <div class="radio-group">
+                  <label>
+                    <input type="radio" name="maze-layout" value="center-out" checked />
+                    Center → Out
+                  </label>
+                  <label>
+                    <input type="radio" name="maze-layout" value="out-out" />
+                    Out → Out
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
