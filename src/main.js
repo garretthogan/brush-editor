@@ -123,6 +123,36 @@ transformControlsHelper.traverse((child) => {
 })
 scene.add(transformControlsHelper) // Helper must be in scene for gizmo to render
 
+let isTransformDragging = false
+
+transformControls.addEventListener('dragging-changed', (e) => {
+  isTransformDragging = e.value
+  if (!selectedLight || !e.value) return
+  const mode = transformControls.getMode()
+  if (mode === 'scale' && (selectedLight.type === 'point' || selectedLight.type === 'spot')) {
+    lightTransformState.baseDistance = selectedLight.light.distance ?? 0
+  }
+})
+
+transformControls.addEventListener('mouseDown', () => {
+  if (!selectedLight) return
+  const mode = transformControls.getMode()
+  if (mode === 'scale' && (selectedLight.type === 'point' || selectedLight.type === 'spot')) {
+    lightTransformState.baseDistance = selectedLight.light.distance ?? 0
+  }
+})
+
+transformControls.addEventListener('change', () => {
+  if (!selectedLight) return
+  if (!isTransformDragging) return
+  const mode = transformControls.getMode()
+  if (mode === 'rotate') {
+    updateLightDirectionFromRotation(selectedLight)
+  } else if (mode === 'scale') {
+    applyLightScaleToDistance(selectedLight)
+  }
+})
+
 // --- Brush State ---
 const brushes = []
 let selectedBrush = null
@@ -140,6 +170,10 @@ const SPOT_LIGHT_CONE_RADIUS = 0.35
 const DIRECTIONAL_LIGHT_HELPER_RADIUS = 0.18
 const DIRECTIONAL_LIGHT_HELPER_CONE_LENGTH = 0.9
 const DIRECTIONAL_LIGHT_HELPER_CONE_RADIUS = 0.25
+const LIGHT_BASE_DIRECTION = new THREE.Vector3(0, -1, 0)
+const lightTransformState = {
+  baseDistance: null,
+}
 
 // --- Undo Stack ---
 const MAX_UNDO = 50
@@ -421,7 +455,9 @@ function addAmbientLight() {
 }
 
 function getLightHelpers() {
-  return lights.filter((e) => e.helper).map((e) => e.helper)
+  return lights
+    .filter((e) => e.helper && e.helper.isObject3D)
+    .map((e) => e.helper)
 }
 
 function pickLight(event) {
@@ -448,8 +484,18 @@ function selectLight(entry) {
     transformControls.detach()
   }
   if (entry) {
+    if (!entry.light || !entry.light.isObject3D) {
+      transformControls.detach()
+      transformControls.enabled = false
+      transformControlsHelper.visible = false
+      selectedLight = null
+      updateLightControls()
+      return
+    }
     if (entry.type !== 'ambient') {
-      const mode = currentTool === 'scale' ? 'translate' : currentTool
+      const allowedModes = new Set(['translate', 'rotate', 'scale'])
+      let mode = allowedModes.has(currentTool) ? currentTool : 'translate'
+      if (entry.type === 'directional' && mode === 'scale') mode = 'translate'
       transformControls.setMode(mode)
       transformControls.enabled = true
       transformControls.attach(entry.light)
@@ -567,6 +613,26 @@ function updateDirectionalLightHelpers() {
     entry.helper.lookAt(light.target.position)
     entry.helper.rotateX(-Math.PI / 2)
   })
+}
+
+function updateLightDirectionFromRotation(entry) {
+  if (!entry || (entry.type !== 'spot' && entry.type !== 'directional')) return
+  const light = entry.light
+  const dir = LIGHT_BASE_DIRECTION.clone().applyQuaternion(light.quaternion)
+  light.target.position.copy(light.position).add(dir)
+  updateSpotLightHelpers()
+  updateDirectionalLightHelpers()
+  updateLightControls()
+}
+
+function applyLightScaleToDistance(entry) {
+  if (!entry || (entry.type !== 'point' && entry.type !== 'spot')) return
+  const light = entry.light
+  const base = lightTransformState.baseDistance ?? light.distance ?? 0
+  const scale = Math.max(light.scale.x, light.scale.y, light.scale.z)
+  light.distance = Math.max(0, base * scale)
+  light.scale.set(1, 1, 1)
+  updateLightControls()
 }
 
 function getMazeControls() {
@@ -780,6 +846,16 @@ function setTransformMode(mode) {
     transformControls.enabled = true
     transformControls.attach(selectedBrush)
   } else if (selectedLight && selectedLight.type !== 'ambient') {
+    if (!selectedLight.light || !selectedLight.light.isObject3D) {
+      transformControls.detach()
+      transformControls.enabled = false
+      return
+    }
+    let lightMode = mode
+    if (selectedLight.type === 'directional' && lightMode === 'scale') {
+      lightMode = 'translate'
+    }
+    transformControls.setMode(lightMode)
     transformControls.enabled = true
     transformControls.attach(selectedLight.light)
   } else {
@@ -882,7 +958,7 @@ function setSkyboxState(state) {
 
 function serializeLevel() {
   return {
-    version: 1,
+    version: 2,
     brushes: brushes
       .filter((m) => m.userData.type !== 'imported')
       .map((m) => {
@@ -897,6 +973,28 @@ function serializeLevel() {
         base.height = m.userData.height
       } else {
         base.size = [...m.userData.size]
+      }
+      return base
+    }),
+    lights: lights.map((entry) => {
+      const light = entry.light
+      const base = {
+        type: entry.type,
+        color: `#${light.color.getHexString()}`,
+        intensity: light.intensity,
+        position: light.position.toArray(),
+      }
+      if (entry.type === 'point' || entry.type === 'spot') {
+        base.distance = light.distance
+        base.decay = light.decay
+      }
+      if (entry.type === 'spot') {
+        base.angle = light.angle
+        base.penumbra = light.penumbra
+        base.target = light.target?.position?.toArray()
+      }
+      if (entry.type === 'directional') {
+        base.target = light.target?.position?.toArray()
       }
       return base
     }),
@@ -928,8 +1026,79 @@ function deserializeLevel(data) {
     scene.add(mesh)
     brushes.push(mesh)
   })
+
+  lights.forEach((entry) => {
+    if (entry.light.target) scene.remove(entry.light.target)
+    scene.remove(entry.light)
+    if (entry.helper) {
+      entry.helper.traverse((child) => {
+        child.geometry?.dispose()
+        if (child.material && child.material.dispose) child.material.dispose()
+      })
+    }
+  })
+  lights.length = 0
+
+  if (data.lights) {
+    data.lights.forEach((l) => {
+      const color = l.color ?? '#ffffff'
+      let light
+      let helper = null
+      if (l.type === 'point') {
+        light = new THREE.PointLight(
+          color,
+          l.intensity ?? 1,
+          l.distance ?? 20,
+          l.decay ?? 0.5
+        )
+        helper = createPointLightHelper(light)
+      } else if (l.type === 'spot') {
+        light = new THREE.SpotLight(
+          color,
+          l.intensity ?? 1,
+          l.distance ?? 25,
+          l.angle ?? Math.PI / 6,
+          l.penumbra ?? 0.5,
+          l.decay ?? 1
+        )
+        helper = createSpotLightHelper(light)
+      } else if (l.type === 'directional') {
+        light = new THREE.DirectionalLight(color, l.intensity ?? 1)
+        helper = createDirectionalLightHelper(light)
+      } else if (l.type === 'ambient') {
+        light = new THREE.AmbientLight(color, l.intensity ?? 0.5)
+        helper = createAmbientLightHelper(light)
+      } else {
+        return
+      }
+      const defaultPos = l.type === 'point'
+        ? [0, 5, 0]
+        : l.type === 'spot'
+          ? [0, 8, 4]
+          : l.type === 'directional'
+            ? [5, 10, 5]
+            : [0, 3, 0]
+      light.position.fromArray(l.position ?? defaultPos)
+      light.castShadow = false
+      if (light.target) {
+        light.target.position.fromArray(l.target ?? [0, 0, 0])
+        scene.add(light.target)
+      }
+      if (helper) {
+        light.add(helper)
+      }
+      scene.add(light)
+      const entry = { light, helper, type: l.type }
+      if (helper) helper.userData.lightEntry = entry
+      lights.push(entry)
+    })
+  }
+
+  updateSpotLightHelpers()
+  updateDirectionalLightHelpers()
   if (data.skybox) setSkyboxState(data.skybox)
   selectBrush(null)
+  selectLight(null)
 }
 
 async function saveLevel() {
@@ -1250,7 +1419,6 @@ resizeObserver.observe(viewport)
 function animate() {
   requestAnimationFrame(animate)
   orbitControls.update()
-  transformControlsHelper.updateMatrixWorld()
   updateSpotLightHelpers()
   updateDirectionalLightHelpers()
   renderer.render(scene, camera)
