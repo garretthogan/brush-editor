@@ -51,6 +51,10 @@ function getArenaTexture() {
   const tex = textureLoader.load(ARENA_TEXTURE_URL)
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping
   tex.colorSpace = THREE.SRGBColorSpace
+  tex.anisotropy = maxAnisotropy
+  tex.generateMipmaps = false
+  tex.minFilter = THREE.LinearFilter
+  tex.magFilter = THREE.LinearFilter
   arenaTextureCache = tex
   return tex
 }
@@ -93,6 +97,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping
 renderer.toneMappingExposure = 0.5
 viewport.appendChild(renderer.domElement)
 pickRectElement = renderer.domElement
+const maxAnisotropy = renderer.capabilities.getMaxAnisotropy()
 
 const pickDebug = document.getElementById('pick-debug')
 function reportPick({ brush, lightEntry, target }) {
@@ -679,15 +684,20 @@ function getMazeControls() {
 }
 
 function getArenaControls() {
+  const wallHeight = parseFloat(document.getElementById('arena-height').value)
+  const obstacleRaw = parseFloat(document.getElementById('arena-obstacle-height').value)
+  const obstacleHeight = Math.min(obstacleRaw, wallHeight)
   return {
     cols: parseInt(document.getElementById('arena-cols').value, 10),
     rows: parseInt(document.getElementById('arena-rows').value, 10),
     tileSize: parseFloat(document.getElementById('arena-tile').value),
-    wallHeight: parseFloat(document.getElementById('arena-height').value),
+    wallHeight,
+    obstacleHeight,
     density: parseFloat(document.getElementById('arena-density').value),
     buildingCount: parseInt(document.getElementById('arena-buildings').value, 10),
     smoothingPasses: parseInt(document.getElementById('arena-smoothing').value, 10),
     corridorWidth: parseInt(document.getElementById('arena-corridor').value, 10),
+    exitWidth: parseInt(document.getElementById('arena-exit-width').value, 10),
     candidates: parseInt(document.getElementById('arena-candidates').value, 10),
   }
 }
@@ -735,7 +745,7 @@ function rotateArenaPoint(x, z, rotation) {
   return { x: vec.x, z: vec.z }
 }
 
-function arenaGridToMeshes(grid, tileSize, wallHeight, offset = [0, 0, 0], rotation = null) {
+function arenaGridToMeshes(grid, tileSize, obstacleHeight, offset = [0, 0, 0], rotation = null) {
   const cols = grid.length
   const rows = grid[0].length
   const ox = ((cols - 1) / 2) * tileSize
@@ -749,7 +759,7 @@ function arenaGridToMeshes(grid, tileSize, wallHeight, offset = [0, 0, 0], rotat
       const rotated = rotateArenaPoint(localX, localZ, rotation)
       const px = rotated.x + offX
       const pz = rotated.z + offZ
-      const mesh = addBrushMesh([tileSize, wallHeight, tileSize], [px, wallHeight / 2 + offY, pz])
+      const mesh = addBrushMesh([tileSize, obstacleHeight, tileSize], [px, obstacleHeight / 2 + offY, pz])
       applyArenaTexture(mesh)
       if (rotation) mesh.rotation.copy(rotation)
     }
@@ -856,6 +866,15 @@ function ensureArenaPreview() {
 
 function updateArenaPreviewFromControls() {
   const ctrl = getArenaControls()
+  const obstacleInput = document.getElementById('arena-obstacle-height')
+  const obstacleValue = document.getElementById('arena-obstacle-height-value')
+  if (obstacleInput) {
+    obstacleInput.max = String(ctrl.wallHeight)
+    if (ctrl.obstacleHeight < parseFloat(obstacleInput.value)) {
+      obstacleInput.value = String(ctrl.obstacleHeight)
+      if (obstacleValue) obstacleValue.textContent = String(ctrl.obstacleHeight)
+    }
+  }
   const size = [ctrl.cols * ctrl.tileSize, ctrl.wallHeight, ctrl.rows * ctrl.tileSize]
   const preview = ensureArenaPreview()
   preview.geometry.dispose()
@@ -941,7 +960,7 @@ function addArenaFloor(cols, rows, tileSize, offset = [0, 0, 0], rotation = null
   return mesh
 }
 
-function placeArenaMarkers(arena, tileSize, wallHeight, offset = [0, 0, 0], rotation = null) {
+function placeArenaMarkers(arena, tileSize, wallHeight, obstacleHeight, offset = [0, 0, 0], rotation = null) {
   const cols = arena.grid.length
   const rows = arena.grid[0].length
   const ox = ((cols - 1) / 2) * tileSize
@@ -953,7 +972,8 @@ function placeArenaMarkers(arena, tileSize, wallHeight, offset = [0, 0, 0], rota
     z: cell.z * tileSize - oz,
   })
 
-  const spawnHeight = wallHeight * 0.7
+  const markerBaseHeight = Math.min(wallHeight, obstacleHeight)
+  const spawnHeight = markerBaseHeight * 0.7
   const spawnRadius = tileSize * 0.3
   arena.spawns.forEach((cell) => {
     const pos = cellToWorld(cell)
@@ -961,7 +981,7 @@ function placeArenaMarkers(arena, tileSize, wallHeight, offset = [0, 0, 0], rota
     addArenaMarkerCylinder(spawnRadius, spawnHeight, [rotated.x + offX, spawnHeight / 2 + offY, rotated.z + offZ])
   })
 
-  const flagHeight = wallHeight * 0.5
+  const flagHeight = markerBaseHeight * 0.5
   const flagRadius = tileSize * 0.22
   arena.flags.forEach((cell) => {
     const pos = cellToWorld(cell)
@@ -969,7 +989,7 @@ function placeArenaMarkers(arena, tileSize, wallHeight, offset = [0, 0, 0], rota
     addArenaMarkerCylinder(flagRadius, flagHeight, [rotated.x + offX, flagHeight / 2 + offY, rotated.z + offZ])
   })
 
-  const collisionHeight = wallHeight * 0.6
+  const collisionHeight = markerBaseHeight * 0.6
   const collisionRadius = tileSize * 0.25
   arena.collisionPoints.forEach((cell) => {
     const pos = cellToWorld(cell)
@@ -977,7 +997,7 @@ function placeArenaMarkers(arena, tileSize, wallHeight, offset = [0, 0, 0], rota
     addArenaMarkerCylinder(collisionRadius, collisionHeight, [rotated.x + offX, collisionHeight / 2 + offY, rotated.z + offZ])
   })
 
-  const coverHeight = wallHeight * 0.45
+  const coverHeight = obstacleHeight * 0.9
   const coverSize = tileSize * 0.5
   arena.covers.forEach((cell) => {
     const pos = cellToWorld(cell)
@@ -999,6 +1019,7 @@ function generateArena() {
     buildingCount: ctrl.buildingCount,
     smoothingPasses: ctrl.smoothingPasses,
     corridorWidth: ctrl.corridorWidth,
+    exitWidth: ctrl.exitWidth,
     candidates: ctrl.candidates,
   })
 
@@ -1006,8 +1027,8 @@ function generateArena() {
   const baseOffset = preview?.position ? preview.position.toArray() : [0, 0, 0]
   const baseRotation = preview?.rotation ? preview.rotation.clone() : null
   addArenaFloor(ctrl.cols, ctrl.rows, ctrl.tileSize, baseOffset, baseRotation)
-  arenaGridToMeshes(arena.grid, ctrl.tileSize, ctrl.wallHeight, baseOffset, baseRotation)
-  placeArenaMarkers(arena, ctrl.tileSize, ctrl.wallHeight, baseOffset, baseRotation)
+  arenaGridToMeshes(arena.grid, ctrl.tileSize, ctrl.obstacleHeight, baseOffset, baseRotation)
+  placeArenaMarkers(arena, ctrl.tileSize, ctrl.wallHeight, ctrl.obstacleHeight, baseOffset, baseRotation)
 
   selectBrush(null)
 }
@@ -1561,10 +1582,12 @@ bindArenaSlider('arena-cols', 'arena-cols-value', updateArenaPreviewFromControls
 bindArenaSlider('arena-rows', 'arena-rows-value', updateArenaPreviewFromControls)
 bindArenaSlider('arena-tile', 'arena-tile-value', updateArenaPreviewFromControls)
 bindArenaSlider('arena-height', 'arena-height-value', updateArenaPreviewFromControls)
+bindArenaSlider('arena-obstacle-height', 'arena-obstacle-height-value', updateArenaPreviewFromControls)
 bindArenaSlider('arena-density', 'arena-density-value')
 bindArenaSlider('arena-buildings', 'arena-buildings-value')
 bindArenaSlider('arena-smoothing', 'arena-smoothing-value')
 bindArenaSlider('arena-corridor', 'arena-corridor-value')
+bindArenaSlider('arena-exit-width', 'arena-exit-width-value')
 bindArenaSlider('arena-candidates', 'arena-candidates-value')
 
 // Skybox slider value display and apply

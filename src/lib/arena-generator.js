@@ -256,6 +256,7 @@ function buildCandidate(options) {
     buildingMaxSize,
     smoothingPasses,
     corridorWidth,
+    exitWidth,
   } = options
   const grid = createGrid(cols, rows, 0)
 
@@ -311,8 +312,8 @@ function buildCandidate(options) {
     }
   }
 
-  const exitWidth = Math.max(1, corridorWidth)
-  const exitOffset = Math.floor(exitWidth / 2)
+  const exitSpan = Math.max(1, exitWidth)
+  const exitOffset = Math.floor(exitSpan / 2)
   const useHorizontal = Math.random() > 0.5
   if (useHorizontal) {
     const minX = 1
@@ -461,6 +462,7 @@ function fitnessScore(metrics) {
  * @param {number} [options.buildingMaxSize=6]
  * @param {number} [options.smoothingPasses=2]
  * @param {number} [options.corridorWidth=1]
+ * @param {number} [options.exitWidth=2]
  * @param {number} [options.candidates=8]
  * @returns {{ grid:number[][], spawns:Array, flags:Array, collisionPoints:Array, covers:Array }}
  */
@@ -474,6 +476,7 @@ export function generateArena(options = {}) {
     buildingMaxSize = 6,
     smoothingPasses = 2,
     corridorWidth = 1,
+    exitWidth = 2,
     candidates = 8,
   } = options
 
@@ -486,6 +489,7 @@ export function generateArena(options = {}) {
     buildingMaxSize: clamp(buildingMaxSize, 2, 16),
     smoothingPasses: clamp(smoothingPasses, 0, 6),
     corridorWidth: clamp(corridorWidth, 1, 4),
+    exitWidth: clamp(exitWidth, 1, 8),
   }
   safe.buildingMaxSize = Math.max(safe.buildingMaxSize, safe.buildingMinSize)
 
