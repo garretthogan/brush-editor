@@ -6,6 +6,7 @@ import { Sky } from 'three/addons/objects/Sky.js'
 import { saveGlvl, loadGlvlFromFile } from './lib/glvl-io.js'
 import { loadGlbFromFile } from './lib/glb-io.js'
 import { generateMaze as generateMazeGrid } from './lib/maze-generator.js'
+import { generateArena as generateArenaGrid } from './lib/arena-generator.js'
 import { createInputHandler } from './lib/input-commands.js'
 
 const GRID_COLOR = 0x333333
@@ -41,6 +42,10 @@ function loadTextureForSpawn() {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping
   tex.colorSpace = THREE.SRGBColorSpace
   return tex
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value))
 }
 
 // --- Scene Setup ---
@@ -157,6 +162,7 @@ transformControls.addEventListener('change', () => {
 const brushes = []
 let selectedBrush = null
 let currentTool = 'select'
+let arenaPreview = null
 
 // --- Light State ---
 const lights = [] // { light, helper, type: 'point'|'spot'|'directional'|'ambient' }
@@ -648,6 +654,20 @@ function getMazeControls() {
   }
 }
 
+function getArenaControls() {
+  return {
+    cols: parseInt(document.getElementById('arena-cols').value, 10),
+    rows: parseInt(document.getElementById('arena-rows').value, 10),
+    tileSize: parseFloat(document.getElementById('arena-tile').value),
+    wallHeight: parseFloat(document.getElementById('arena-height').value),
+    density: parseFloat(document.getElementById('arena-density').value),
+    buildingCount: parseInt(document.getElementById('arena-buildings').value, 10),
+    smoothingPasses: parseInt(document.getElementById('arena-smoothing').value, 10),
+    corridorWidth: parseInt(document.getElementById('arena-corridor').value, 10),
+    candidates: parseInt(document.getElementById('arena-candidates').value, 10),
+  }
+}
+
 function mazeGridToMeshes(grid, cols, rows, spaceBetweenWalls, wallThickness, wallHeight) {
   const w = cols * 2 + 1
   const h = rows * 2 + 1
@@ -684,9 +704,34 @@ function mazeGridToMeshes(grid, cols, rows, spaceBetweenWalls, wallThickness, wa
   }
 }
 
-function generateMaze() {
-  pushUndoState()
-  // Clear only maze-generated brushes, keep user-added brushes
+function rotateArenaPoint(x, z, rotation) {
+  if (!rotation) return { x, z }
+  const vec = new THREE.Vector3(x, 0, z)
+  vec.applyEuler(rotation)
+  return { x: vec.x, z: vec.z }
+}
+
+function arenaGridToMeshes(grid, tileSize, wallHeight, offset = [0, 0, 0], rotation = null) {
+  const cols = grid.length
+  const rows = grid[0].length
+  const ox = ((cols - 1) / 2) * tileSize
+  const oz = ((rows - 1) / 2) * tileSize
+  const [offX, offY, offZ] = offset
+  for (let x = 0; x < cols; x++) {
+    for (let z = 0; z < rows; z++) {
+      if (grid[x][z] !== 1) continue
+      const localX = x * tileSize - ox
+      const localZ = z * tileSize - oz
+      const rotated = rotateArenaPoint(localX, localZ, rotation)
+      const px = rotated.x + offX
+      const pz = rotated.z + offZ
+      const mesh = addBrushMesh([tileSize, wallHeight, tileSize], [px, wallHeight / 2 + offY, pz])
+      if (rotation) mesh.rotation.copy(rotation)
+    }
+  }
+}
+
+function clearGeneratedBrushes() {
   const toKeep = brushes.filter((m) => m.userData.isUserBrush)
   const toRemove = brushes.filter((m) => !m.userData.isUserBrush)
   toRemove.forEach((m) => {
@@ -698,6 +743,12 @@ function generateMaze() {
   brushes.length = 0
   brushes.push(...toKeep)
   selectBrush(selectedBrush && brushes.includes(selectedBrush) ? selectedBrush : null)
+}
+
+function generateMaze() {
+  pushUndoState()
+  // Clear only generator brushes, keep user-added brushes
+  clearGeneratedBrushes()
 
   const ctrl = getMazeControls()
   const { grid, cols, rows } = generateMazeGrid({
@@ -720,6 +771,219 @@ function generateMaze() {
   selectBrush(null)
 }
 
+function addArenaMarkerCylinder(radius, height, position) {
+  const mesh = createCylinderMesh(radius, height, position, brushes.length * 4)
+  mesh.userData.id = crypto.randomUUID()
+  mesh.userData.isUserBrush = false
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  scene.add(mesh)
+  brushes.push(mesh)
+  return mesh
+}
+
+function addArenaCover(size, position) {
+  const mesh = createBrushMesh(size, position, brushes.length * 4)
+  mesh.userData.id = crypto.randomUUID()
+  mesh.userData.isUserBrush = false
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  scene.add(mesh)
+  brushes.push(mesh)
+  return mesh
+}
+
+function createArenaPreviewMesh(size, position) {
+  const geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xff3333,
+    transparent: true,
+    opacity: 0.25,
+    depthWrite: false,
+  })
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.position.set(...position)
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  mesh.userData.isBrush = true
+  mesh.userData.isUserBrush = true
+  mesh.userData.isArenaPreview = true
+  mesh.userData.type = 'arena-preview'
+  mesh.userData.size = [...size]
+  return mesh
+}
+
+function ensureArenaPreview() {
+  if (arenaPreview && brushes.includes(arenaPreview)) return arenaPreview
+  const ctrl = getArenaControls()
+  const size = [ctrl.cols * ctrl.tileSize, ctrl.wallHeight, ctrl.rows * ctrl.tileSize]
+  const position = [0, ctrl.wallHeight / 2, 0]
+  arenaPreview = createArenaPreviewMesh(size, position)
+  arenaPreview.userData.id = crypto.randomUUID()
+  arenaPreview.userData.arenaCols = ctrl.cols
+  arenaPreview.userData.arenaRows = ctrl.rows
+  scene.add(arenaPreview)
+  brushes.push(arenaPreview)
+  return arenaPreview
+}
+
+function updateArenaPreviewFromControls() {
+  const ctrl = getArenaControls()
+  const size = [ctrl.cols * ctrl.tileSize, ctrl.wallHeight, ctrl.rows * ctrl.tileSize]
+  const preview = ensureArenaPreview()
+  preview.geometry.dispose()
+  preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
+  preview.userData.size = [...size]
+  preview.userData.arenaCols = ctrl.cols
+  preview.userData.arenaRows = ctrl.rows
+  if (!preview.position || Number.isNaN(preview.position.y)) {
+    preview.position.set(0, ctrl.wallHeight / 2, 0)
+  }
+}
+
+function getBrushWorldBox(mesh) {
+  const box = new THREE.Box3()
+  return box.setFromObject(mesh)
+}
+
+function isArenaPreviewValid() {
+  if (!arenaPreview || !arenaPreview.visible) return false
+  const previewBox = getBrushWorldBox(arenaPreview)
+  for (const brush of brushes) {
+    if (!brush || brush === arenaPreview) continue
+    if (brush.userData?.isArenaPreview) continue
+    const brushBox = getBrushWorldBox(brush)
+    if (previewBox.intersectsBox(brushBox)) return false
+  }
+  return true
+}
+
+function updateArenaPreviewValidity() {
+  if (!arenaPreview) return false
+  const valid = isArenaPreviewValid()
+  if (arenaPreview.material?.color) {
+    arenaPreview.material.color.set(valid ? 0x33ff66 : 0xff3333)
+  }
+  return valid
+}
+
+function snapScaledCount(count, scale, min, max) {
+  if (scale > 1) return clamp(Math.ceil(count * scale - 1e-6), min, max)
+  if (scale < 1) return clamp(Math.floor(count * scale + 1e-6), min, max)
+  return clamp(Math.round(count), min, max)
+}
+
+function syncArenaControlsFromPreview(preview, scale) {
+  if (!preview) return
+  const tileSize = parseFloat(document.getElementById('arena-tile')?.value ?? '1')
+  if (!tileSize || Number.isNaN(tileSize)) return
+  const wallHeight = parseFloat(document.getElementById('arena-height')?.value ?? '1')
+  const colsEl = document.getElementById('arena-cols')
+  const rowsEl = document.getElementById('arena-rows')
+  const colsValueEl = document.getElementById('arena-cols-value')
+  const rowsValueEl = document.getElementById('arena-rows-value')
+  if (!colsEl || !rowsEl) return
+  const minCols = parseInt(colsEl.min ?? '1', 10)
+  const maxCols = parseInt(colsEl.max ?? '999', 10)
+  const minRows = parseInt(rowsEl.min ?? '1', 10)
+  const maxRows = parseInt(rowsEl.max ?? '999', 10)
+  const baseCols = preview.userData.arenaCols ?? parseInt(colsEl.value, 10) ?? 1
+  const baseRows = preview.userData.arenaRows ?? parseInt(rowsEl.value, 10) ?? 1
+  const nextCols = snapScaledCount(baseCols, scale.x, minCols, maxCols)
+  const nextRows = snapScaledCount(baseRows, scale.z, minRows, maxRows)
+  colsEl.value = String(nextCols)
+  rowsEl.value = String(nextRows)
+  if (colsValueEl) colsValueEl.textContent = String(nextCols)
+  if (rowsValueEl) rowsValueEl.textContent = String(nextRows)
+  const size = [nextCols * tileSize, wallHeight, nextRows * tileSize]
+  preview.geometry.dispose()
+  preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
+  preview.userData.size = [...size]
+  preview.userData.arenaCols = nextCols
+  preview.userData.arenaRows = nextRows
+  preview.position.y = wallHeight / 2
+}
+
+function addArenaFloor(cols, rows, tileSize, offset = [0, 0, 0], rotation = null) {
+  const thickness = Math.max(0.1, tileSize * 0.1)
+  const width = cols * tileSize
+  const depth = rows * tileSize
+  const position = [offset[0], thickness / 2 + offset[1], offset[2]]
+  const mesh = addArenaCover([width, thickness, depth], position)
+  if (rotation) mesh.rotation.copy(rotation)
+  return mesh
+}
+
+function placeArenaMarkers(arena, tileSize, wallHeight, offset = [0, 0, 0], rotation = null) {
+  const cols = arena.grid.length
+  const rows = arena.grid[0].length
+  const ox = ((cols - 1) / 2) * tileSize
+  const oz = ((rows - 1) / 2) * tileSize
+  const [offX, offY, offZ] = offset
+
+  const cellToWorld = (cell) => ({
+    x: cell.x * tileSize - ox,
+    z: cell.z * tileSize - oz,
+  })
+
+  const spawnHeight = wallHeight * 0.7
+  const spawnRadius = tileSize * 0.3
+  arena.spawns.forEach((cell) => {
+    const pos = cellToWorld(cell)
+    const rotated = rotateArenaPoint(pos.x, pos.z, rotation)
+    addArenaMarkerCylinder(spawnRadius, spawnHeight, [rotated.x + offX, spawnHeight / 2 + offY, rotated.z + offZ])
+  })
+
+  const flagHeight = wallHeight * 0.5
+  const flagRadius = tileSize * 0.22
+  arena.flags.forEach((cell) => {
+    const pos = cellToWorld(cell)
+    const rotated = rotateArenaPoint(pos.x, pos.z, rotation)
+    addArenaMarkerCylinder(flagRadius, flagHeight, [rotated.x + offX, flagHeight / 2 + offY, rotated.z + offZ])
+  })
+
+  const collisionHeight = wallHeight * 0.6
+  const collisionRadius = tileSize * 0.25
+  arena.collisionPoints.forEach((cell) => {
+    const pos = cellToWorld(cell)
+    const rotated = rotateArenaPoint(pos.x, pos.z, rotation)
+    addArenaMarkerCylinder(collisionRadius, collisionHeight, [rotated.x + offX, collisionHeight / 2 + offY, rotated.z + offZ])
+  })
+
+  const coverHeight = wallHeight * 0.45
+  const coverSize = tileSize * 0.5
+  arena.covers.forEach((cell) => {
+    const pos = cellToWorld(cell)
+    const rotated = rotateArenaPoint(pos.x, pos.z, rotation)
+    const mesh = addArenaCover([coverSize, coverHeight, coverSize], [rotated.x + offX, coverHeight / 2 + offY, rotated.z + offZ])
+    if (rotation) mesh.rotation.copy(rotation)
+  })
+}
+
+function generateArena() {
+  pushUndoState()
+  if (!updateArenaPreviewValidity()) return
+
+  const ctrl = getArenaControls()
+  const arena = generateArenaGrid({
+    cols: ctrl.cols,
+    rows: ctrl.rows,
+    density: ctrl.density,
+    buildingCount: ctrl.buildingCount,
+    smoothingPasses: ctrl.smoothingPasses,
+    corridorWidth: ctrl.corridorWidth,
+    candidates: ctrl.candidates,
+  })
+
+  const preview = ensureArenaPreview()
+  const baseOffset = preview?.position ? preview.position.toArray() : [0, 0, 0]
+  const baseRotation = preview?.rotation ? preview.rotation.clone() : null
+  addArenaFloor(ctrl.cols, ctrl.rows, ctrl.tileSize, baseOffset, baseRotation)
+  arenaGridToMeshes(arena.grid, ctrl.tileSize, ctrl.wallHeight, baseOffset, baseRotation)
+  placeArenaMarkers(arena, ctrl.tileSize, ctrl.wallHeight, baseOffset, baseRotation)
+
+  selectBrush(null)
+}
 function addOutline(mesh) {
   if (mesh.userData.outline) return
   const outlineGeom = mesh.geometry.clone()
@@ -876,6 +1140,16 @@ function bakeScaleIntoGeometry(mesh) {
   const s = mesh.scale
   const outline = mesh.userData.outline
 
+  if (mesh.userData.isArenaPreview) {
+    syncArenaControlsFromPreview(mesh, s)
+    mesh.scale.set(1, 1, 1)
+    if (outline) {
+      outline.geometry.dispose()
+      outline.geometry = mesh.geometry.clone()
+    }
+    return
+  }
+
   if (mesh.userData.type === 'imported') {
     mesh.geometry.scale(s.x, s.y, s.z)
     mesh.scale.set(1, 1, 1)
@@ -960,7 +1234,7 @@ function serializeLevel() {
   return {
     version: 2,
     brushes: brushes
-      .filter((m) => m.userData.type !== 'imported')
+      .filter((m) => m.userData.type !== 'imported' && !m.userData.isArenaPreview)
       .map((m) => {
       const base = {
         id: m.userData.id,
@@ -1156,6 +1430,7 @@ function loadLevelFromFile() {
 let editorMode = 'brush'
 const brushControls = document.getElementById('brush-controls')
 const mazeControls = document.getElementById('maze-controls')
+const arenaControls = document.getElementById('arena-controls')
 const skyboxControls = document.getElementById('skybox-controls')
 
 function applySkyParams() {
@@ -1194,11 +1469,23 @@ function setEditorMode(mode) {
   document.getElementById(`tab-${mode}`).classList.add('active')
   brushControls.classList.toggle('hidden', mode !== 'brush')
   mazeControls.classList.toggle('hidden', mode !== 'maze')
+  arenaControls.classList.toggle('hidden', mode !== 'arena')
   skyboxControls.classList.toggle('hidden', mode !== 'skybox')
+  if (mode === 'arena') {
+    updateArenaPreviewFromControls()
+    updateArenaPreviewValidity()
+    if (arenaPreview) arenaPreview.visible = true
+    setCurrentTool('translate')
+    setTransformMode('translate')
+  } else if (arenaPreview) {
+    arenaPreview.visible = false
+    if (selectedBrush === arenaPreview) selectBrush(null)
+  }
 }
 
 document.getElementById('tab-brush').addEventListener('click', () => setEditorMode('brush'))
 document.getElementById('tab-maze').addEventListener('click', () => setEditorMode('maze'))
+document.getElementById('tab-arena').addEventListener('click', () => setEditorMode('arena'))
 document.getElementById('tab-skybox').addEventListener('click', () => setEditorMode('skybox'))
 
 // --- Collapsible panels ---
@@ -1232,6 +1519,26 @@ document.getElementById('maze-center-size').addEventListener('input', (e) => {
   document.getElementById('maze-center-size-value').textContent = e.target.value
 })
 
+// --- Arena slider value display ---
+function bindArenaSlider(id, valueId, onChange) {
+  const input = document.getElementById(id)
+  const valueEl = document.getElementById(valueId)
+  if (!input || !valueEl) return
+  input.addEventListener('input', (e) => {
+    valueEl.textContent = e.target.value
+    if (onChange) onChange()
+  })
+}
+bindArenaSlider('arena-cols', 'arena-cols-value', updateArenaPreviewFromControls)
+bindArenaSlider('arena-rows', 'arena-rows-value', updateArenaPreviewFromControls)
+bindArenaSlider('arena-tile', 'arena-tile-value', updateArenaPreviewFromControls)
+bindArenaSlider('arena-height', 'arena-height-value', updateArenaPreviewFromControls)
+bindArenaSlider('arena-density', 'arena-density-value')
+bindArenaSlider('arena-buildings', 'arena-buildings-value')
+bindArenaSlider('arena-smoothing', 'arena-smoothing-value')
+bindArenaSlider('arena-corridor', 'arena-corridor-value')
+bindArenaSlider('arena-candidates', 'arena-candidates-value')
+
 // Skybox slider value display and apply
 function bindSkySlider(id, valueId) {
   const input = document.getElementById(id)
@@ -1261,6 +1568,8 @@ function updateCenterRoomVisibility() {
 }
 document.getElementById('maze-start-from-center').addEventListener('change', updateCenterRoomVisibility)
 updateCenterRoomVisibility()
+
+document.getElementById('btn-generate-arena').addEventListener('click', generateArena)
 
 // --- Input (command pattern) ---
 const inputHandler = createInputHandler({
@@ -1421,6 +1730,7 @@ function animate() {
   orbitControls.update()
   updateSpotLightHelpers()
   updateDirectionalLightHelpers()
+  if (arenaPreview?.visible) updateArenaPreviewValidity()
   renderer.render(scene, camera)
 }
 animate()

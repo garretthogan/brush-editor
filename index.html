@@ -12,6 +12,7 @@
         <div id="mode-tabs">
           <button id="tab-brush" class="tab active">Object Editor</button>
           <button id="tab-maze" class="tab">Maze Generator</button>
+          <button id="tab-arena" class="tab">Arena Generator</button>
           <button id="tab-skybox" class="tab">Skybox Editor</button>
         </div>
         <div id="file-buttons">
@@ -185,6 +186,62 @@
                   <input type="checkbox" id="maze-start-from-center" checked />
                   Start from center
                 </label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="arena-controls" class="mode-panel hidden">
+          <div class="panel collapsible">
+            <button class="panel-header" data-panel="arena-settings">
+              <span class="panel-chevron">▼</span>
+              Arena Settings
+            </button>
+            <div class="panel-content" id="panel-arena-settings">
+              <button id="btn-generate-arena" class="primary">Generate Arena</button>
+              <div class="control-row">
+                <label for="arena-cols">Columns</label>
+                <input type="range" id="arena-cols" min="10" max="50" step="1" value="24" />
+                <span id="arena-cols-value">24</span>
+              </div>
+              <div class="control-row">
+                <label for="arena-rows">Rows</label>
+                <input type="range" id="arena-rows" min="10" max="50" step="1" value="24" />
+                <span id="arena-rows-value">24</span>
+              </div>
+              <div class="control-row">
+                <label for="arena-tile">Tile size</label>
+                <input type="range" id="arena-tile" min="0.5" max="6" step="0.5" value="2.5" />
+                <span id="arena-tile-value">2.5</span>
+              </div>
+              <div class="control-row">
+                <label for="arena-height">Wall height</label>
+                <input type="range" id="arena-height" min="1" max="12" step="0.5" value="3" />
+                <span id="arena-height-value">3</span>
+              </div>
+              <div class="control-row">
+                <label for="arena-density">Obstacle density</label>
+                <input type="range" id="arena-density" min="0" max="0.6" step="0.05" value="0.28" />
+                <span id="arena-density-value">0.28</span>
+              </div>
+              <div class="control-row">
+                <label for="arena-buildings">Building count</label>
+                <input type="range" id="arena-buildings" min="0" max="20" step="1" value="8" />
+                <span id="arena-buildings-value">8</span>
+              </div>
+              <div class="control-row">
+                <label for="arena-smoothing">Smoothing passes</label>
+                <input type="range" id="arena-smoothing" min="0" max="4" step="1" value="2" />
+                <span id="arena-smoothing-value">2</span>
+              </div>
+              <div class="control-row">
+                <label for="arena-corridor">Corridor width</label>
+                <input type="range" id="arena-corridor" min="1" max="3" step="1" value="1" />
+                <span id="arena-corridor-value">1</span>
+              </div>
+              <div class="control-row">
+                <label for="arena-candidates">Candidate maps</label>
+                <input type="range" id="arena-candidates" min="1" max="12" step="1" value="8" />
+                <span id="arena-candidates-value">8</span>
               </div>
             </div>
           </div>
