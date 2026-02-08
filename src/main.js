@@ -1844,9 +1844,6 @@ bindSkySlider('sun-intensity', 'sun-intensity-value')
 const sunColorInput = document.getElementById('sun-color')
 if (sunColorInput) sunColorInput.addEventListener('input', applySkyParams)
 applySkyParams()
-orbitControls.target.copy(sun)
-camera.lookAt(sun)
-orbitControls.update()
 
 // --- Camera speed control ---
 const cameraSpeedInput = document.getElementById('camera-speed')
