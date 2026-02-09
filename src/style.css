@@ -306,6 +306,12 @@ body {
   background: #2a3a4a;
 }
 
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .control-row {
   display: flex;
   align-items: center;

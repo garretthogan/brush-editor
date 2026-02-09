@@ -145,7 +145,16 @@
               Maze Settings
             </button>
             <div class="panel-content" id="panel-maze-settings">
-              <button id="btn-generate-maze" class="primary">Generate Maze</button>
+              <div class="panel-actions">
+                <button id="btn-generate-maze" class="primary">Generate Maze</button>
+                <button id="btn-iterate-maze" type="button">Iterate</button>
+              </div>
+              <div class="control-row">
+                <label>
+                  <input type="checkbox" id="maze-preview-visible" checked />
+                  Show preview
+                </label>
+              </div>
               <div class="control-row">
                 <label for="maze-cols">Columns</label>
                 <input type="range" id="maze-cols" min="5" max="30" step="1" value="10" />
@@ -197,7 +206,16 @@
               Arena Settings
             </button>
             <div class="panel-content" id="panel-arena-settings">
-              <button id="btn-generate-arena" class="primary">Generate Arena</button>
+              <div class="panel-actions">
+                <button id="btn-generate-arena" class="primary">Generate Arena</button>
+                <button id="btn-iterate-arena" type="button">Iterate</button>
+              </div>
+              <div class="control-row">
+                <label>
+                  <input type="checkbox" id="arena-preview-visible" checked />
+                  Show preview
+                </label>
+              </div>
               <div class="control-row">
                 <label for="arena-cols">Columns</label>
                 <input type="range" id="arena-cols" min="10" max="50" step="1" value="24" />

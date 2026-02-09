@@ -212,6 +212,55 @@ let currentTool = 'select'
 let arenaPreview = null
 let mazePreview = null
 let lastArenaWallHeight = 3
+let lastMazeState = null
+let lastArenaState = null
+let lastMazePlacement = null
+let lastArenaPlacement = null
+let lastMazeBrushes = []
+let lastArenaBrushes = []
+let activeGenerationCollector = null
+
+function beginGenerationCollector() {
+  activeGenerationCollector = []
+  return activeGenerationCollector
+}
+
+function endGenerationCollector() {
+  const collected = activeGenerationCollector ?? []
+  activeGenerationCollector = null
+  return collected
+}
+
+function updateIterateButtons() {
+  const mazeBtn = document.getElementById('btn-iterate-maze')
+  if (mazeBtn) mazeBtn.disabled = !lastMazeState
+  const arenaBtn = document.getElementById('btn-iterate-arena')
+  if (arenaBtn) arenaBtn.disabled = !lastArenaState
+}
+
+function updateMazePreviewVisibility() {
+  const checkbox = document.getElementById('maze-preview-visible')
+  const shouldShow = checkbox?.checked ?? true
+  if (shouldShow) {
+    const preview = ensureMazePreview()
+    preview.visible = true
+  } else if (mazePreview) {
+    mazePreview.visible = false
+    if (selectedBrush === mazePreview) selectBrush(null)
+  }
+}
+
+function updateArenaPreviewVisibility() {
+  const checkbox = document.getElementById('arena-preview-visible')
+  const shouldShow = checkbox?.checked ?? true
+  if (shouldShow) {
+    const preview = ensureArenaPreview()
+    preview.visible = true
+  } else if (arenaPreview) {
+    arenaPreview.visible = false
+    if (selectedBrush === arenaPreview) selectBrush(null)
+  }
+}
 
 // --- Light State ---
 const lights = [] // { light, helper, type: 'point'|'spot'|'directional'|'ambient' }
@@ -781,6 +830,7 @@ function addMazeBrushMesh(size, position, rotation) {
   mesh.userData.isUserBrush = false
   mesh.userData.generator = 'maze'
   if (rotation) mesh.rotation.copy(rotation)
+  if (activeGenerationCollector) activeGenerationCollector.push(mesh)
   return mesh
 }
 
@@ -809,6 +859,7 @@ function arenaGridToMeshes(grid, tileSize, wallHeight, offset = [0, 0, 0], rotat
       mesh.userData.generator = 'arena'
       applyArenaTexture(mesh)
       if (rotation) mesh.rotation.copy(rotation)
+      if (activeGenerationCollector) activeGenerationCollector.push(mesh)
     }
   }
 }
@@ -827,23 +878,85 @@ function clearGeneratedBrushesByGenerator(generator) {
   selectBrush(selectedBrush && brushes.includes(selectedBrush) ? selectedBrush : null)
 }
 
+function removeGeneratedBrushes(list) {
+  if (!list || list.length === 0) return
+  const toRemove = new Set(list)
+  list.forEach((m) => {
+    if (!m) return
+    scene.remove(m)
+    m.geometry?.dispose?.()
+    m.material?.map?.dispose?.()
+    m.material?.dispose?.()
+  })
+  const nextBrushes = brushes.filter((m) => !toRemove.has(m))
+  brushes.length = 0
+  brushes.push(...nextBrushes)
+  if (selectedBrush && !brushes.includes(selectedBrush)) selectBrush(null)
+}
+
+function cloneGrid(grid) {
+  return grid.map((col) => col.slice())
+}
+
+function cloneCells(cells) {
+  return cells.map((cell) => ({ ...cell }))
+}
+
+function cloneArenaState(arena) {
+  return {
+    grid: cloneGrid(arena.grid),
+    spawns: cloneCells(arena.spawns),
+    flags: cloneCells(arena.flags),
+    collisionPoints: cloneCells(arena.collisionPoints),
+    covers: cloneCells(arena.covers),
+  }
+}
+
+function gridsEqual(a, b) {
+  if (!a || !b) return false
+  if (a.length !== b.length) return false
+  for (let x = 0; x < a.length; x++) {
+    const colA = a[x]
+    const colB = b[x]
+    if (!colA || !colB || colA.length !== colB.length) return false
+    for (let z = 0; z < colA.length; z++) {
+      if (colA[z] !== colB[z]) return false
+    }
+  }
+  return true
+}
+
 function generateMaze() {
   pushUndoState()
   if (!updateMazePreviewValidity()) return
-  clearGeneratedBrushesByGenerator('maze')
 
   const ctrl = getMazeControls()
-  const { grid, cols, rows } = generateMazeGrid({
+  let mazeResult = generateMazeGrid({
     cols: ctrl.cols,
     rows: ctrl.rows,
     exitWidth: ctrl.exitWidth,
     centerRoomSize: ctrl.centerRoomSize,
     layout: ctrl.layout,
   })
+  if (lastMazeState) {
+    let attempts = 0
+    while (attempts < 5 && gridsEqual(mazeResult.grid, lastMazeState.grid)) {
+      mazeResult = generateMazeGrid({
+        cols: ctrl.cols,
+        rows: ctrl.rows,
+        exitWidth: ctrl.exitWidth,
+        centerRoomSize: ctrl.centerRoomSize,
+        layout: ctrl.layout,
+      })
+      attempts += 1
+    }
+  }
+  const { grid, cols, rows } = mazeResult
 
   const preview = ensureMazePreview()
   const baseOffset = getPreviewBaseOffset(preview, ctrl.wallHeight)
   const baseRotation = preview?.rotation ? preview.rotation.clone() : null
+  beginGenerationCollector()
   const mazeWidth = (cols * 2) * ctrl.spaceBetweenWalls
   const mazeDepth = (rows * 2) * ctrl.spaceBetweenWalls
   const floorThickness = Math.max(0.1, ctrl.spaceBetweenWalls * 0.1)
@@ -858,6 +971,21 @@ function generateMaze() {
     baseOffset,
     baseRotation
   )
+  lastMazeBrushes = endGenerationCollector()
+
+  lastMazeState = {
+    grid: cloneGrid(grid),
+    cols,
+    rows,
+  }
+  lastMazePlacement = {
+    offset: [...baseOffset],
+    rotation: baseRotation ? baseRotation.clone() : null,
+  }
+  updateIterateButtons()
+  const mazePreviewCheckbox = document.getElementById('maze-preview-visible')
+  if (mazePreviewCheckbox) mazePreviewCheckbox.checked = false
+  if (mazePreview) mazePreview.visible = false
 
   selectBrush(null)
 }
@@ -872,6 +1000,7 @@ function addArenaMarkerCylinder(radius, height, position) {
   mesh.receiveShadow = false
   scene.add(mesh)
   brushes.push(mesh)
+  if (activeGenerationCollector) activeGenerationCollector.push(mesh)
   return mesh
 }
 
@@ -885,6 +1014,7 @@ function addArenaCover(size, position) {
   mesh.receiveShadow = false
   scene.add(mesh)
   brushes.push(mesh)
+  if (activeGenerationCollector) activeGenerationCollector.push(mesh)
   return mesh
 }
 
@@ -1012,7 +1142,7 @@ function getBrushWorldBox(mesh) {
   return box.setFromObject(mesh)
 }
 
-function isPreviewValid(preview, otherPreview) {
+function isPreviewValid(preview, otherPreview, ignoreGenerator = null) {
   if (!preview || !preview.visible) return false
   const previewBox = getBrushWorldBox(preview)
   if (otherPreview?.visible) {
@@ -1022,15 +1152,16 @@ function isPreviewValid(preview, otherPreview) {
   for (const brush of brushes) {
     if (!brush || brush === preview || brush === otherPreview) continue
     if (brush.userData?.isArenaPreview || brush.userData?.isMazePreview) continue
+    if (ignoreGenerator && brush.userData?.generator === ignoreGenerator) continue
     const brushBox = getBrushWorldBox(brush)
     if (previewBox.intersectsBox(brushBox)) return false
   }
   return true
 }
 
-function updatePreviewValidity(preview, otherPreview) {
+function updatePreviewValidity(preview, otherPreview, ignoreGenerator = null) {
   if (!preview) return false
-  const valid = isPreviewValid(preview, otherPreview)
+  const valid = isPreviewValid(preview, otherPreview, ignoreGenerator)
   if (preview.material?.color) {
     preview.material.color.set(valid ? 0x33ff66 : 0xff3333)
   }
@@ -1186,7 +1317,7 @@ function generateArena() {
   if (!updateArenaPreviewValidity()) return
 
   const ctrl = getArenaControls()
-  const arena = generateArenaGrid({
+  let arena = generateArenaGrid({
     cols: ctrl.cols,
     rows: ctrl.rows,
     density: ctrl.density,
@@ -1196,13 +1327,148 @@ function generateArena() {
     exitWidth: ctrl.exitWidth,
     candidates: ctrl.candidates,
   })
+  if (lastArenaState) {
+    let attempts = 0
+    while (attempts < 5 && gridsEqual(arena.grid, lastArenaState.grid)) {
+      arena = generateArenaGrid({
+        cols: ctrl.cols,
+        rows: ctrl.rows,
+        density: ctrl.density,
+        buildingCount: ctrl.buildingCount,
+        smoothingPasses: ctrl.smoothingPasses,
+        corridorWidth: ctrl.corridorWidth,
+        exitWidth: ctrl.exitWidth,
+        candidates: ctrl.candidates,
+      })
+      attempts += 1
+    }
+  }
 
   const preview = ensureArenaPreview()
   const baseOffset = getPreviewBaseOffset(preview, ctrl.wallHeight)
   const baseRotation = preview?.rotation ? preview.rotation.clone() : null
+  beginGenerationCollector()
   addArenaFloor(ctrl.cols, ctrl.rows, ctrl.tileSize, baseOffset, baseRotation)
   arenaGridToMeshes(arena.grid, ctrl.tileSize, ctrl.wallHeight, baseOffset, baseRotation)
   placeArenaMarkers(arena, ctrl.tileSize, ctrl.wallHeight, ctrl.obstacleHeight, baseOffset, baseRotation)
+  lastArenaBrushes = endGenerationCollector()
+
+  lastArenaState = cloneArenaState(arena)
+  lastArenaPlacement = {
+    offset: [...baseOffset],
+    rotation: baseRotation ? baseRotation.clone() : null,
+  }
+  updateIterateButtons()
+  const arenaPreviewCheckbox = document.getElementById('arena-preview-visible')
+  if (arenaPreviewCheckbox) arenaPreviewCheckbox.checked = false
+  if (arenaPreview) arenaPreview.visible = false
+
+  selectBrush(null)
+}
+
+function regenerateMazeFromLast() {
+  if (!lastMazeState) return
+  pushUndoState()
+  removeGeneratedBrushes(lastMazeBrushes)
+
+  const ctrl = getMazeControls()
+  beginGenerationCollector()
+  let mazeResult = generateMazeGrid({
+    cols: ctrl.cols,
+    rows: ctrl.rows,
+    exitWidth: ctrl.exitWidth,
+    centerRoomSize: ctrl.centerRoomSize,
+    layout: ctrl.layout,
+  })
+  let attempts = 0
+  while (attempts < 5 && lastMazeState && gridsEqual(mazeResult.grid, lastMazeState.grid)) {
+    mazeResult = generateMazeGrid({
+      cols: ctrl.cols,
+      rows: ctrl.rows,
+      exitWidth: ctrl.exitWidth,
+      centerRoomSize: ctrl.centerRoomSize,
+      layout: ctrl.layout,
+    })
+    attempts += 1
+  }
+  const { grid, cols, rows } = mazeResult
+  const baseOffset = lastMazePlacement?.offset ?? [0, 0, 0]
+  const baseRotation = lastMazePlacement?.rotation ? lastMazePlacement.rotation.clone() : null
+  const mazeWidth = (cols * 2) * ctrl.spaceBetweenWalls
+  const mazeDepth = (rows * 2) * ctrl.spaceBetweenWalls
+  const floorThickness = Math.max(0.1, ctrl.spaceBetweenWalls * 0.1)
+  addMazeFloor(mazeWidth, mazeDepth, floorThickness, baseOffset, baseRotation)
+  mazeGridToMeshes(
+    grid,
+    cols,
+    rows,
+    ctrl.spaceBetweenWalls,
+    ctrl.wallThickness,
+    ctrl.wallHeight,
+    baseOffset,
+    baseRotation
+  )
+  lastMazeBrushes = endGenerationCollector()
+
+  lastMazeState = {
+    grid: cloneGrid(grid),
+    cols,
+    rows,
+  }
+  updateIterateButtons()
+
+  selectBrush(null)
+}
+
+function regenerateArenaFromLast() {
+  if (!lastArenaState) return
+  pushUndoState()
+  removeGeneratedBrushes(lastArenaBrushes)
+
+  const ctrl = getArenaControls()
+  beginGenerationCollector()
+  let arena = generateArenaGrid({
+    cols: ctrl.cols,
+    rows: ctrl.rows,
+    density: ctrl.density,
+    buildingCount: ctrl.buildingCount,
+    smoothingPasses: ctrl.smoothingPasses,
+    corridorWidth: ctrl.corridorWidth,
+    exitWidth: ctrl.exitWidth,
+    candidates: ctrl.candidates,
+  })
+  let attempts = 0
+  while (attempts < 5 && lastArenaState && gridsEqual(arena.grid, lastArenaState.grid)) {
+    arena = generateArenaGrid({
+      cols: ctrl.cols,
+      rows: ctrl.rows,
+      density: ctrl.density,
+      buildingCount: ctrl.buildingCount,
+      smoothingPasses: ctrl.smoothingPasses,
+      corridorWidth: ctrl.corridorWidth,
+      exitWidth: ctrl.exitWidth,
+      candidates: ctrl.candidates,
+    })
+    attempts += 1
+  }
+  const cols = arena.grid.length
+  const rows = arena.grid[0]?.length ?? 0
+  const baseOffset = lastArenaPlacement?.offset ?? [0, 0, 0]
+  const baseRotation = lastArenaPlacement?.rotation ? lastArenaPlacement.rotation.clone() : null
+  addArenaFloor(cols, rows, ctrl.tileSize, baseOffset, baseRotation)
+  arenaGridToMeshes(arena.grid, ctrl.tileSize, ctrl.wallHeight, baseOffset, baseRotation)
+  placeArenaMarkers(
+    arena,
+    ctrl.tileSize,
+    ctrl.wallHeight,
+    ctrl.obstacleHeight,
+    baseOffset,
+    baseRotation
+  )
+  lastArenaBrushes = endGenerationCollector()
+
+  lastArenaState = cloneArenaState(arena)
+  updateIterateButtons()
 
   selectBrush(null)
 }
@@ -1306,10 +1572,26 @@ const pointer = new THREE.Vector2()
 function findBrushFromObject(obj) {
   let current = obj
   while (current) {
-    if (current.userData?.isBrush) return current
+    if (current.userData?.isBrush) {
+      if (isBrushSelectable(current)) return current
+      return null
+    }
     current = current.parent
   }
   return null
+}
+
+function isBrushSelectable(brush) {
+  if (!brush || !brush.visible) return false
+  if (brush.userData?.isMazePreview) {
+    const checkbox = document.getElementById('maze-preview-visible')
+    if (checkbox && !checkbox.checked) return false
+  }
+  if (brush.userData?.isArenaPreview) {
+    const checkbox = document.getElementById('arena-preview-visible')
+    if (checkbox && !checkbox.checked) return false
+  }
+  return true
 }
 
 function pickBrush(event) {
@@ -1731,14 +2013,14 @@ function setEditorMode(mode) {
   if (mode === 'arena') {
     updateArenaPreviewFromControls()
     updateArenaPreviewValidity()
-    if (arenaPreview) arenaPreview.visible = true
+    updateArenaPreviewVisibility()
     if (mazePreview) mazePreview.visible = false
     setCurrentTool('translate')
     setTransformMode('translate')
   } else if (mode === 'maze') {
     updateMazePreviewFromControls()
     updateMazePreviewValidity()
-    if (mazePreview) mazePreview.visible = true
+    updateMazePreviewVisibility()
     if (arenaPreview) arenaPreview.visible = false
     setCurrentTool('translate')
     setTransformMode('translate')
@@ -1893,8 +2175,18 @@ function updateCenterRoomVisibility() {
 }
 document.getElementById('maze-start-from-center').addEventListener('change', updateCenterRoomVisibility)
 updateCenterRoomVisibility()
+updateIterateButtons()
+document.getElementById('maze-preview-visible')?.addEventListener('change', () => {
+  updateMazePreviewVisibility()
+  updateMazePreviewValidity()
+})
+document.getElementById('arena-preview-visible')?.addEventListener('change', () => {
+  updateArenaPreviewVisibility()
+  updateArenaPreviewValidity()
+})
 
 document.getElementById('btn-generate-arena').addEventListener('click', generateArena)
+document.getElementById('btn-iterate-arena').addEventListener('click', regenerateArenaFromLast)
 
 // --- Input (command pattern) ---
 const inputHandler = createInputHandler({
@@ -2039,6 +2331,7 @@ document.getElementById('btn-rotate').addEventListener('click', () => inputHandl
 document.getElementById('btn-scale').addEventListener('click', () => inputHandler.setTransformMode('scale'))
 document.getElementById('btn-delete').addEventListener('click', () => inputHandler.deleteSelected())
 document.getElementById('btn-generate-maze').addEventListener('click', generateMaze)
+document.getElementById('btn-iterate-maze').addEventListener('click', regenerateMazeFromLast)
 document.getElementById('btn-save').addEventListener('click', () => saveLevel())
 document.getElementById('btn-load').addEventListener('click', () => loadLevelFromFile())
 
