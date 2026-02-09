@@ -2142,8 +2142,21 @@ if (cameraSpeedInput) {
   applyCameraSpeed()
 }
 
+const cameraFlySpeedInput = document.getElementById('camera-fly-speed')
+const cameraFlySpeedValue = document.getElementById('camera-fly-speed-value')
+let cameraFlySpeed = 6
+function applyCameraFlySpeed() {
+  if (!cameraFlySpeedInput) return
+  const value = parseFloat(cameraFlySpeedInput.value)
+  cameraFlySpeed = Number.isFinite(value) ? value : 0
+  if (cameraFlySpeedValue) cameraFlySpeedValue.textContent = cameraFlySpeedInput.value
+}
+if (cameraFlySpeedInput) {
+  cameraFlySpeedInput.addEventListener('input', applyCameraFlySpeed)
+  applyCameraFlySpeed()
+}
+
 // --- Fly movement (WASD + LMB) ---
-const FLY_SPEED = 6
 const flyKeys = { w: false, a: false, s: false, d: false, q: false, e: false }
 let flyMouseDown = false
 let lastFlyTime = performance.now()
@@ -2408,7 +2421,7 @@ function animate() {
     if (flyKeys.e) move.add(camera.up)
     if (flyKeys.q) move.sub(camera.up)
     if (move.lengthSq() > 0) {
-      move.normalize().multiplyScalar(FLY_SPEED * delta)
+      move.normalize().multiplyScalar(cameraFlySpeed * delta)
       camera.position.add(move)
       orbitControls.target.add(move)
       orbitControls.update()
