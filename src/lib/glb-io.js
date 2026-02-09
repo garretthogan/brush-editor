@@ -94,15 +94,22 @@ export async function saveGlb(objects, options = {}) {
   scene.name = 'level'
   const addObjectToScene = (obj) => {
     if (!obj || typeof obj.clone !== 'function') return
-    const originalUserData = obj.userData
-    const safeUserData = { ...(originalUserData || {}) }
-    if (safeUserData.outline) delete safeUserData.outline
-    obj.userData = safeUserData
+    const originalUserData = new Map()
+    obj.traverse((child) => {
+      if (!child?.userData) return
+      originalUserData.set(child, child.userData)
+      const safeUserData = { ...child.userData }
+      if (safeUserData.outline) delete safeUserData.outline
+      if (safeUserData.lightEntry) delete safeUserData.lightEntry
+      child.userData = safeUserData
+    })
     let clone
     try {
       clone = obj.clone()
     } finally {
-      obj.userData = originalUserData
+      originalUserData.forEach((userData, child) => {
+        child.userData = userData
+      })
     }
     clone.traverse((child) => {
       if (child.userData?.isOutline) {
@@ -111,6 +118,12 @@ export async function saveGlb(objects, options = {}) {
       }
       if (child.userData?.outline) {
         delete child.userData.outline
+      }
+      if (child.userData?.lightEntry) {
+        delete child.userData.lightEntry
+      }
+      if (child.isPointLight || child.isSpotLight) {
+        child.decay = 2
       }
     })
     scene.add(clone)
