@@ -6,8 +6,7 @@ import { Sky } from 'three/addons/objects/Sky.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
-import { saveGlvl, loadGlvlFromFile } from './lib/glvl-io.js'
-import { loadGlbFromFile } from './lib/glb-io.js'
+import { loadGlbFromFile, saveGlb } from './lib/glb-io.js'
 import { generateMaze as generateMazeGrid } from './lib/maze-generator.js'
 import { generateArena as generateArenaGrid } from './lib/arena-generator.js'
 import { createInputHandler } from './lib/input-commands.js'
@@ -86,22 +85,30 @@ function resolveBrushTextureInfo(textureInfo) {
   return { index: getSelectedTextureIndex() }
 }
 
-function createBrushMaterial(texture, depthBias, lit) {
+function loadTextureForSpawn() {
+  return getTextureByIndex(getSelectedTextureIndex())
+}
+
+function createBrushMaterial(texture, depthBias, lit, color = null) {
   if (lit) {
-    return new THREE.MeshStandardMaterial({
+    const material = new THREE.MeshStandardMaterial({
       map: texture,
       flatShading: false,
       polygonOffset: true,
       polygonOffsetFactor: 2,
       polygonOffsetUnits: depthBias,
     })
+    if (color && material.color) material.color.copy(color)
+    return material
   }
-  return new THREE.MeshBasicMaterial({
+  const material = new THREE.MeshBasicMaterial({
     map: texture,
     polygonOffset: true,
     polygonOffsetFactor: 2,
     polygonOffsetUnits: depthBias,
   })
+  if (color && material.color) material.color.copy(color)
+  return material
 }
 
 function applyTextureIndex(mesh, index) {
@@ -135,15 +142,62 @@ function applyArenaObstacleTexture(mesh) {
 function updateBrushMaterials(lit) {
   brushes.forEach((mesh) => {
     if (!mesh?.material || mesh.userData?.isArenaPreview || mesh.userData?.isMazePreview) return
-    if (mesh.userData?.type === 'imported') return
-    const texture = mesh.material.map ?? null
-    const depthBias = mesh.material.polygonOffsetUnits ?? 0
-    const nextMaterial = createBrushMaterial(texture, depthBias, lit)
-    if (mesh.material.map && mesh.material.map !== texture) {
-      mesh.material.map.dispose()
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    const nextMaterials = materials.map((mat) => {
+      if (!mat) return mat
+      const texture = mat.map ?? null
+      const depthBias = mat.polygonOffsetUnits ?? 0
+      const color = mat.color ? mat.color.clone() : null
+      const nextMaterial = createBrushMaterial(texture, depthBias, lit, color)
+      return nextMaterial
+    })
+    materials.forEach((mat) => mat?.dispose?.())
+    mesh.material = Array.isArray(mesh.material) ? nextMaterials : nextMaterials[0]
+  })
+}
+
+function updateShadowState(enable) {
+  renderer.shadowMap.enabled = enable
+  if (enable) renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  const configureShadow = (light) => {
+    if (!light?.shadow) return
+    light.shadow.mapSize.set(1024, 1024)
+    light.shadow.bias = -0.0005
+    if (light.isDirectionalLight) {
+      const cam = light.shadow.camera
+      cam.left = -200
+      cam.right = 200
+      cam.top = 200
+      cam.bottom = -200
+      cam.near = 0.1
+      cam.far = 1000
+      cam.updateProjectionMatrix()
+    } else if (light.isSpotLight) {
+      light.shadow.camera.near = 0.5
+      light.shadow.camera.far = 300
+      light.shadow.camera.updateProjectionMatrix()
+    } else if (light.isPointLight) {
+      light.shadow.camera.near = 0.1
+      light.shadow.camera.far = Math.max(10, light.distance || 100)
+      light.shadow.camera.updateProjectionMatrix()
     }
-    mesh.material.dispose()
-    mesh.material = nextMaterial
+  }
+  lights.forEach((entry) => {
+    if (!entry?.light) return
+    entry.light.castShadow = enable && entry.type !== 'ambient'
+    if (entry.light.castShadow) configureShadow(entry.light)
+  })
+  dirLight.castShadow = enable
+  if (enable) configureShadow(dirLight)
+  brushes.forEach((mesh) => {
+    if (!mesh?.isMesh) return
+    if (mesh.userData?.isArenaPreview || mesh.userData?.isMazePreview) {
+      mesh.castShadow = false
+      mesh.receiveShadow = false
+      return
+    }
+    mesh.castShadow = enable
+    mesh.receiveShadow = enable
   })
 }
 
@@ -206,6 +260,10 @@ const dirLight = new THREE.DirectionalLight(0xffffff, 1)
 dirLight.position.set(10, 15, 10)
 dirLight.castShadow = false
 scene.add(dirLight)
+const baseLightEntries = [
+  { light: ambient, helper: null, type: 'ambient', isDefault: true, label: 'ambient_light' },
+  { light: dirLight, helper: null, type: 'directional', isDefault: true, label: 'sun_directional' },
+]
 
 // Grid helper - render first, don't write depth, so grid lines don't show through meshes
 const grid = new THREE.GridHelper(20, 20, GRID_COLOR, GRID_COLOR)
@@ -382,18 +440,168 @@ function updateSceneList() {
   container.appendChild(objectList)
 
   const lightList = document.createElement('div')
-  if (lights.length > 0) {
+  const allLights = [
+    ...baseLightEntries.filter((entry) => !entry.isDefault),
+    ...lights.map((entry, idx) => ({
+      ...entry,
+      label: `${entry.type}_light_${String(idx + 1).padStart(2, '0')}`,
+    })),
+  ].filter((entry) => entry?.light?.parent)
+  if (allLights.length > 0) {
     lightList.appendChild(makeLabel('Lights'))
   }
-  lights.forEach((entry, idx) => {
-    if (!entry?.light?.parent) return
-    const label = `${entry.type}_light_${String(idx + 1).padStart(2, '0')}`
-    lightList.appendChild(makeButton(label, () => {
+  allLights.forEach((entry) => {
+    lightList.appendChild(makeButton(entry.label, () => {
       selectBrush(null)
       selectLight(entry)
     }))
   })
   container.appendChild(lightList)
+}
+
+function buildExportEntries() {
+  const groups = new Map()
+  const loose = []
+  brushes.forEach((mesh) => {
+    if (!mesh || mesh.userData?.isArenaPreview || mesh.userData?.isMazePreview) return
+    if (!mesh.parent) return
+    const groupId = mesh.userData?.generatorGroup
+    const subtype = mesh.userData?.subtype
+    const labelBase = subtype ?? mesh.userData?.type ?? 'object'
+    const label = `${labelBase}_${String(mesh.userData?.id ?? '').slice(0, 8) || 'no-id'}`
+    const entry = { type: 'mesh', object: mesh, label }
+    if (groupId) {
+      if (!groups.has(groupId)) groups.set(groupId, [])
+      groups.get(groupId).push(entry)
+    } else {
+      loose.push(entry)
+    }
+  })
+
+  const lightsList = []
+  const allLights = [
+    ...baseLightEntries,
+    ...lights.map((entry, idx) => ({
+      ...entry,
+      label: `${entry.type}_light_${String(idx + 1).padStart(2, '0')}`,
+    })),
+  ].filter((entry) => entry?.light?.parent)
+  allLights.forEach((entry) => {
+    lightsList.push({
+      type: 'light',
+      object: entry.light,
+      label: entry.label,
+    })
+  })
+
+  return { groups, loose, lights: lightsList }
+}
+
+function openExportModal() {
+  const modal = document.getElementById('export-modal')
+  const list = document.getElementById('export-list')
+  if (!modal || !list) return
+  list.innerHTML = ''
+
+  const { groups, loose, lights: lightEntries } = buildExportEntries()
+  const itemMap = new Map()
+
+  const makeItem = (entry) => {
+    const label = document.createElement('label')
+    label.className = 'export-item'
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    input.checked = true
+    const span = document.createElement('span')
+    span.textContent = entry.label
+    label.appendChild(input)
+    label.appendChild(span)
+    itemMap.set(input, entry)
+    return { label, input }
+  }
+
+  const updateGroupState = (groupInput, childInputs) => {
+    const checkedCount = childInputs.filter((c) => c.checked).length
+    groupInput.indeterminate = checkedCount > 0 && checkedCount < childInputs.length
+    groupInput.checked = checkedCount === childInputs.length
+  }
+
+  if (groups.size > 0 || loose.length > 0) {
+    const section = document.createElement('div')
+    section.className = 'export-label'
+    section.textContent = 'Objects'
+    list.appendChild(section)
+  }
+
+  Array.from(groups.keys()).sort().forEach((groupId) => {
+    const details = document.createElement('details')
+    details.className = 'export-group'
+    details.open = false
+    const summary = document.createElement('summary')
+    const summaryLabel = document.createElement('label')
+    summaryLabel.className = 'export-label'
+    const summaryInput = document.createElement('input')
+    summaryInput.type = 'checkbox'
+    summaryInput.checked = true
+    const summaryText = document.createElement('span')
+    summaryText.textContent = groupId
+    summaryLabel.appendChild(summaryInput)
+    summaryLabel.appendChild(summaryText)
+    summary.appendChild(summaryLabel)
+    details.appendChild(summary)
+    const itemsWrap = document.createElement('div')
+    itemsWrap.className = 'export-items'
+    const childInputs = []
+    groups.get(groupId).forEach((entry) => {
+      const { label, input } = makeItem(entry)
+      childInputs.push(input)
+      itemsWrap.appendChild(label)
+      input.addEventListener('change', () => updateGroupState(summaryInput, childInputs))
+    })
+    summaryInput.addEventListener('change', () => {
+      childInputs.forEach((input) => {
+        input.checked = summaryInput.checked
+      })
+      updateGroupState(summaryInput, childInputs)
+    })
+    updateGroupState(summaryInput, childInputs)
+    details.appendChild(itemsWrap)
+    list.appendChild(details)
+  })
+
+  loose.forEach((entry) => {
+    list.appendChild(makeItem(entry).label)
+  })
+
+  if (lightEntries.length > 0) {
+    const section = document.createElement('div')
+    section.className = 'export-label'
+    section.textContent = 'Lights'
+    list.appendChild(section)
+  }
+
+  lightEntries.forEach((entry) => {
+    list.appendChild(makeItem(entry).label)
+  })
+
+  modal.classList.remove('hidden')
+
+  const confirm = document.getElementById('btn-export-confirm')
+  const cancel = document.getElementById('btn-export-cancel')
+  const close = () => modal.classList.add('hidden')
+
+  const onConfirm = async () => {
+    const selected = []
+    itemMap.forEach((entry, input) => {
+      if (input.checked) selected.push(entry.object)
+    })
+    close()
+    if (selected.length === 0) return
+    await saveGlb(selected, { filename: 'level.glb' })
+  }
+
+  confirm?.addEventListener('click', onConfirm, { once: true })
+  cancel?.addEventListener('click', close, { once: true })
 }
 
 function updateMazePreviewVisibility() {
@@ -511,8 +719,8 @@ function createBrushMesh(size = [2, 2, 2], position = [0, 1, 0], depthBias = 0, 
   const material = createBrushMaterial(texture, depthBias, useLitMaterials)
   const mesh = new THREE.Mesh(geometry, material)
   mesh.position.set(...position)
-  mesh.castShadow = false
-  mesh.receiveShadow = false
+  mesh.castShadow = useLitMaterials
+  mesh.receiveShadow = useLitMaterials
   mesh.userData.isBrush = true
   mesh.userData.type = 'box'
   mesh.userData.size = [...size]
@@ -529,8 +737,8 @@ function createCylinderMesh(radius = 1, height = 2, position = [0, 1, 0], depthB
   const material = createBrushMaterial(texture, depthBias, useLitMaterials)
   const mesh = new THREE.Mesh(geometry, material)
   mesh.position.set(...position)
-  mesh.castShadow = false
-  mesh.receiveShadow = false
+  mesh.castShadow = useLitMaterials
+  mesh.receiveShadow = useLitMaterials
   mesh.userData.isBrush = true
   mesh.userData.type = 'cylinder'
   mesh.userData.radius = radius
@@ -660,6 +868,7 @@ function addPointLight() {
   setCurrentTool('translate')
   setTransformMode('translate')
   updateSceneList()
+  updateShadowState(useLitMaterials)
 }
 
 function addSpotLight() {
@@ -680,6 +889,7 @@ function addSpotLight() {
   setCurrentTool('translate')
   setTransformMode('translate')
   updateSceneList()
+  updateShadowState(useLitMaterials)
 }
 
 function addDirectionalLight() {
@@ -700,6 +910,7 @@ function addDirectionalLight() {
   setCurrentTool('translate')
   setTransformMode('translate')
   updateSceneList()
+  updateShadowState(useLitMaterials)
 }
 
 function addAmbientLight() {
@@ -715,6 +926,7 @@ function addAmbientLight() {
   selectBrush(null)
   selectLight(entry)
   updateSceneList()
+  updateShadowState(useLitMaterials)
 }
 
 function getLightHelpers() {
@@ -845,6 +1057,7 @@ function updateLightControls() {
 
 function deleteSelectedLight() {
   if (!selectedLight) return
+  if (selectedLight.isDefault) return
   pushUndoState()
   const entry = selectedLight
   const idx = lights.indexOf(entry)
@@ -1717,6 +1930,7 @@ function addOutline(mesh) {
   })
   outlineMat.resolution.set(viewport.clientWidth, viewport.clientHeight)
   const outline = new LineSegments2(outlineGeom, outlineMat)
+  outline.raycast = () => {}
   outline.userData.isOutline = true
   mesh.add(outline)
   mesh.userData.outline = outline
@@ -1726,8 +1940,8 @@ function removeOutline(mesh) {
   const outline = mesh?.userData?.outline
   if (outline) {
     mesh.remove(outline)
-    outline.geometry.dispose()
-    outline.material.dispose()
+    outline.geometry?.dispose?.()
+    outline.material?.dispose?.()
     mesh.userData.outline = null
   }
 }
@@ -2166,7 +2380,7 @@ function deserializeLevel(data) {
 }
 
 async function saveLevel() {
-  await saveGlvl(serializeLevel(), { filename: 'level.glvl' })
+  openExportModal()
 }
 
 function addImportedMeshes(meshes) {
@@ -2182,19 +2396,20 @@ function addImportedMeshes(meshes) {
     mesh.userData.type = 'imported'
     mesh.userData.id = crypto.randomUUID()
     mesh.userData.isUserBrush = true
-    mesh.castShadow = false
-    mesh.receiveShadow = false
+    mesh.castShadow = useLitMaterials
+    mesh.receiveShadow = useLitMaterials
     scene.add(mesh)
     brushes.push(mesh)
   })
   selectBrush(null)
+  updateBrushMaterials(useLitMaterials)
   updateSceneList()
 }
 
 function loadLevelFromFile() {
   const input = document.createElement('input')
   input.type = 'file'
-  input.accept = '.glvl,.gltf,.glb'
+  input.accept = '.gltf,.glb'
   input.style.display = 'none'
   input.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files || [])
@@ -2202,13 +2417,7 @@ function loadLevelFromFile() {
     if (files.length === 0) return
     const first = files[0]
     const ext = first.name.split('.').pop()?.toLowerCase()
-    if (ext === 'glvl') {
-      const data = await loadGlvlFromFile(first)
-      if (data) {
-        pushUndoState()
-        deserializeLevel(data)
-      }
-    } else if (ext === 'glb' || ext === 'gltf') {
+    if (ext === 'glb' || ext === 'gltf') {
       const meshes = await loadGlbFromFile(first)
       addImportedMeshes(meshes)
     }
@@ -2265,6 +2474,7 @@ function setEditorMode(mode) {
   sky.visible = mode === 'skybox'
   useLitMaterials = mode === 'skybox'
   updateBrushMaterials(useLitMaterials)
+  updateShadowState(mode === 'skybox')
   if (mode === 'arena') {
     updateArenaPreviewFromControls()
     updateArenaPreviewValidity()
@@ -2622,6 +2832,12 @@ TEXTURE_POOL.forEach(({ palette, file }, i) => {
   opt.textContent = `${palette} / ${file.replace('.png', '')}`
   textureSelect.appendChild(opt)
 })
+const defaultTextureIndex = TEXTURE_POOL.findIndex(
+  (entry) => entry.palette === 'Dark' && entry.file === 'texture_01.png'
+)
+if (defaultTextureIndex >= 0) {
+  textureSelect.value = String(defaultTextureIndex)
+}
 
 // --- Light controls ---
 function applyDirectionalDirectionFromInputs() {
@@ -2721,6 +2937,9 @@ document.getElementById('btn-generate-maze').addEventListener('click', generateM
 document.getElementById('btn-iterate-maze').addEventListener('click', regenerateMazeFromLast)
 document.getElementById('btn-save').addEventListener('click', () => saveLevel())
 document.getElementById('btn-load').addEventListener('click', () => loadLevelFromFile())
+document.getElementById('btn-export-cancel')?.addEventListener('click', () => {
+  document.getElementById('export-modal')?.classList.add('hidden')
+})
 
 // --- Resize ---
 const resizeObserver = new ResizeObserver(() => {
