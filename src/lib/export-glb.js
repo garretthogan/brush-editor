@@ -20,7 +20,7 @@ export function openExportModal() {
     label.className = 'export-item'
     const input = document.createElement('input')
     input.type = 'checkbox'
-    input.checked = true
+    input.checked = entry.type !== 'light'
     const span = document.createElement('span')
     span.textContent = entry.label
     label.appendChild(input)
@@ -102,7 +102,7 @@ export function openExportModal() {
   const onConfirm = async () => {
     const selected = []
     itemMap.forEach((entry, input) => {
-      if (input.checked) selected.push(entry.object)
+      if (input.checked && entry.object) selected.push(entry.object)
     })
     close()
     if (selected.length === 0) return

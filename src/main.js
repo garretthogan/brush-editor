@@ -4,7 +4,7 @@ import { initScene } from './lib/scene-setup.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
-import { loadGlbFromFile, saveGlb } from './lib/glb-io.js'
+import { loadGlbSceneFromFile, saveGlb } from './lib/glb-io.js'
 import { initUIPanels, updateSceneList } from './lib/ui-panels.js'
 import { initExportSystem, openExportModal } from './lib/export-glb.js'
 import { createImportSystem } from './lib/import-glb.js'
@@ -514,6 +514,36 @@ function addAmbientLight() {
   selectBrush(null)
   selectLight(entry)
   focusCameraOnObject(light)
+  updateSceneList()
+  updateShadowState(useLitMaterials)
+}
+
+function addImportedLight(light) {
+  if (!light || !light.isLight) return
+  const type = light.isPointLight
+    ? 'point'
+    : light.isSpotLight
+      ? 'spot'
+      : light.isDirectionalLight
+        ? 'directional'
+        : light.isAmbientLight
+          ? 'ambient'
+          : null
+  if (!type) return
+  let helper = null
+  if (type === 'point') helper = createPointLightHelper(light)
+  if (type === 'spot') helper = createSpotLightHelper(light)
+  if (type === 'directional') helper = createDirectionalLightHelper(light)
+  if (type === 'ambient') helper = createAmbientLightHelper(light)
+  if (helper) {
+    light.add(helper)
+  }
+  if (light.parent) light.parent.remove(light)
+  scene.add(light)
+  const entry = { light, helper, type }
+  if (helper) helper.userData.lightEntry = entry
+  lights.push(entry)
+  updateLightControls()
   updateSceneList()
   updateShadowState(useLitMaterials)
 }
@@ -2002,7 +2032,7 @@ async function saveLevel() {
 }
 
 const { addImportedMeshes, loadLevelFromFile } = createImportSystem({
-  loadGlbFromFile,
+  loadGlbSceneFromFile,
   loadTextureForSpawn,
   pushUndoState,
   updateBrushMaterials,
@@ -2011,6 +2041,7 @@ const { addImportedMeshes, loadLevelFromFile } = createImportSystem({
   brushes,
   scene,
   getUseLitMaterials: () => useLitMaterials,
+  addImportedLight,
 })
 
 // --- Mode tabs ---

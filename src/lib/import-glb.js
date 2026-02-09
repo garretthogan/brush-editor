@@ -1,5 +1,5 @@
 export function createImportSystem({
-  loadGlbFromFile,
+  loadGlbSceneFromFile,
   loadTextureForSpawn,
   pushUndoState,
   updateBrushMaterials,
@@ -8,7 +8,24 @@ export function createImportSystem({
   brushes,
   scene,
   getUseLitMaterials,
+  addImportedLight,
 }) {
+  function collectMeshes(root) {
+    const meshes = []
+    root.traverse((child) => {
+      if (child.isMesh) meshes.push(child)
+    })
+    return meshes
+  }
+
+  function collectLights(root) {
+    const lights = []
+    root.traverse((child) => {
+      if (child.isLight) lights.push(child)
+    })
+    return lights
+  }
+
   function addImportedMeshes(meshes) {
     if (!meshes || meshes.length === 0) return
     pushUndoState()
@@ -44,8 +61,14 @@ export function createImportSystem({
       const first = files[0]
       const ext = first.name.split('.').pop()?.toLowerCase()
       if (ext === 'glb' || ext === 'gltf') {
-        const meshes = await loadGlbFromFile(first)
+        const sceneRoot = await loadGlbSceneFromFile(first)
+        if (!sceneRoot) return
+        const meshes = collectMeshes(sceneRoot)
+        const lights = collectLights(sceneRoot)
         addImportedMeshes(meshes)
+        if (addImportedLight) {
+          lights.forEach((light) => addImportedLight(light))
+        }
       }
     })
     document.body.appendChild(input)

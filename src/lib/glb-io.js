@@ -92,8 +92,18 @@ export async function saveGlb(objects, options = {}) {
   const exporter = new GLTFExporter()
   const scene = new Scene()
   scene.name = 'level'
-  for (const obj of objects) {
-    const clone = obj.clone()
+  const addObjectToScene = (obj) => {
+    if (!obj || typeof obj.clone !== 'function') return
+    const originalUserData = obj.userData
+    const safeUserData = { ...(originalUserData || {}) }
+    if (safeUserData.outline) delete safeUserData.outline
+    obj.userData = safeUserData
+    let clone
+    try {
+      clone = obj.clone()
+    } finally {
+      obj.userData = originalUserData
+    }
     clone.traverse((child) => {
       if (child.userData?.isOutline) {
         child.parent?.remove(child)
@@ -105,6 +115,14 @@ export async function saveGlb(objects, options = {}) {
     })
     scene.add(clone)
   }
+
+  objects.forEach((obj) => {
+    if (Array.isArray(obj)) {
+      obj.forEach((entry) => addObjectToScene(entry))
+    } else {
+      addObjectToScene(obj)
+    }
+  })
   const glb = await exporter.parseAsync(scene, {
     binary,
     maxTextureSize: 4096,
@@ -162,6 +180,28 @@ export async function loadGlbFromFile(file) {
     return collectMeshes(gltf.scene)
   } catch (err) {
     console.error('Failed to load GLB/GLTF file:', err)
+    return null
+  }
+}
+
+/**
+ * Load a GLB or GLTF file and return the full scene.
+ * @param {File} file - The .glb or .gltf file to load
+ * @returns {Promise<import('three').Object3D|null>} Scene, or null if failed
+ */
+export async function loadGlbSceneFromFile(file) {
+  try {
+    const url = URL.createObjectURL(file)
+    const { loader, failedUrls } = createLoaderWithFallback()
+    const gltf = await loader.loadAsync(url)
+    URL.revokeObjectURL(url)
+    if (failedUrls.size > 0) {
+      const fallback = getFallbackTexture()
+      applyFallbackToMaterials(gltf.scene, fallback)
+    }
+    return gltf.scene
+  } catch (err) {
+    console.error('Failed to load GLB/GLTF scene:', err)
     return null
   }
 }
