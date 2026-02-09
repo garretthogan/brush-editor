@@ -2142,6 +2142,48 @@ if (cameraSpeedInput) {
   applyCameraSpeed()
 }
 
+// --- Fly movement (WASD + LMB) ---
+const FLY_SPEED = 6
+const flyKeys = { w: false, a: false, s: false, d: false, q: false, e: false }
+let flyMouseDown = false
+let lastFlyTime = performance.now()
+
+function shouldIgnoreKeyInput() {
+  const active = document.activeElement
+  return active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')
+}
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.button === 0) flyMouseDown = true
+})
+
+document.addEventListener('pointerup', (e) => {
+  if (e.button === 0) flyMouseDown = false
+})
+
+document.addEventListener('pointercancel', () => {
+  flyMouseDown = false
+})
+
+document.addEventListener('keydown', (e) => {
+  if (shouldIgnoreKeyInput()) return
+  if (e.code === 'KeyW') flyKeys.w = true
+  if (e.code === 'KeyA') flyKeys.a = true
+  if (e.code === 'KeyS') flyKeys.s = true
+  if (e.code === 'KeyD') flyKeys.d = true
+  if (e.code === 'KeyQ') flyKeys.q = true
+  if (e.code === 'KeyE') flyKeys.e = true
+})
+
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'KeyW') flyKeys.w = false
+  if (e.code === 'KeyA') flyKeys.a = false
+  if (e.code === 'KeyS') flyKeys.s = false
+  if (e.code === 'KeyD') flyKeys.d = false
+  if (e.code === 'KeyQ') flyKeys.q = false
+  if (e.code === 'KeyE') flyKeys.e = false
+})
+
 renderer.domElement.addEventListener(
   'wheel',
   (e) => {
@@ -2348,6 +2390,30 @@ resizeObserver.observe(viewport)
 // --- Loop ---
 function animate() {
   requestAnimationFrame(animate)
+  const now = performance.now()
+  const delta = Math.min(0.05, (now - lastFlyTime) / 1000)
+  lastFlyTime = now
+
+  if (flyMouseDown && (flyKeys.w || flyKeys.a || flyKeys.s || flyKeys.d || flyKeys.q || flyKeys.e)) {
+    const forward = new THREE.Vector3()
+    camera.getWorldDirection(forward)
+    forward.y = 0
+    if (forward.lengthSq() > 0) forward.normalize()
+    const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize()
+    const move = new THREE.Vector3()
+    if (flyKeys.w) move.add(forward)
+    if (flyKeys.s) move.sub(forward)
+    if (flyKeys.d) move.add(right)
+    if (flyKeys.a) move.sub(right)
+    if (flyKeys.e) move.add(camera.up)
+    if (flyKeys.q) move.sub(camera.up)
+    if (move.lengthSq() > 0) {
+      move.normalize().multiplyScalar(FLY_SPEED * delta)
+      camera.position.add(move)
+      orbitControls.target.add(move)
+      orbitControls.update()
+    }
+  }
   orbitControls.update()
   updateSpotLightHelpers()
   updateDirectionalLightHelpers()
