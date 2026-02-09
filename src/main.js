@@ -343,6 +343,7 @@ function addBoxBrush() {
   selectBrush(mesh)
   setCurrentTool('translate')
   setTransformMode('translate')
+  focusCameraOnObject(mesh)
   updateSceneList()
 }
 
@@ -359,6 +360,7 @@ function addCylinderBrush() {
   selectBrush(mesh)
   setCurrentTool('translate')
   setTransformMode('translate')
+  focusCameraOnObject(mesh)
   updateSceneList()
 }
 
@@ -450,6 +452,7 @@ function addPointLight() {
   selectLight(entry)
   setCurrentTool('translate')
   setTransformMode('translate')
+  focusCameraOnObject(light)
   updateSceneList()
   updateShadowState(useLitMaterials)
 }
@@ -471,6 +474,7 @@ function addSpotLight() {
   selectLight(entry)
   setCurrentTool('translate')
   setTransformMode('translate')
+  focusCameraOnObject(light)
   updateSceneList()
   updateShadowState(useLitMaterials)
 }
@@ -492,6 +496,7 @@ function addDirectionalLight() {
   selectLight(entry)
   setCurrentTool('translate')
   setTransformMode('translate')
+  focusCameraOnObject(light)
   updateSceneList()
   updateShadowState(useLitMaterials)
 }
@@ -508,6 +513,7 @@ function addAmbientLight() {
   lights.push(entry)
   selectBrush(null)
   selectLight(entry)
+  focusCameraOnObject(light)
   updateSceneList()
   updateShadowState(useLitMaterials)
 }
@@ -571,12 +577,32 @@ function selectLight(entry) {
   updateLightControls()
 }
 
+function focusCameraOnObject(object) {
+  if (!object || !camera || !orbitControls) return
+  const box = new THREE.Box3().setFromObject(object)
+  if (!box.isEmpty()) {
+    const center = box.getCenter(new THREE.Vector3())
+    const size = box.getSize(new THREE.Vector3())
+    const radius = Math.max(size.x, size.y, size.z) * 0.5
+    const distance = Math.max(2, radius * 3)
+    const dir = new THREE.Vector3()
+    camera.getWorldDirection(dir)
+    orbitControls.target.copy(center)
+    camera.position.copy(center).addScaledVector(dir, -distance)
+    orbitControls.update()
+  } else if (object.position) {
+    orbitControls.target.copy(object.position)
+    orbitControls.update()
+  }
+}
+
 initUIPanels({
   brushes,
   lights,
   baseLightEntries,
   selectBrush,
   selectLight,
+  focusCameraOnObject,
 })
 initExportSystem({ saveGlb })
 

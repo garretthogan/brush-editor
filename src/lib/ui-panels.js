@@ -3,13 +3,15 @@ let _lights = null
 let _baseLightEntries = null
 let _selectBrush = null
 let _selectLight = null
+let _focusCameraOnObject = null
 
-export function initUIPanels({ brushes, lights, baseLightEntries, selectBrush, selectLight }) {
+export function initUIPanels({ brushes, lights, baseLightEntries, selectBrush, selectLight, focusCameraOnObject }) {
   _brushes = brushes
   _lights = lights
   _baseLightEntries = baseLightEntries
   _selectBrush = selectBrush
   _selectLight = selectLight
+  _focusCameraOnObject = focusCameraOnObject
 }
 
 export function updateSceneList() {
@@ -71,6 +73,7 @@ export function updateSceneList() {
       sublist.appendChild(makeButton(label, () => {
         if (_selectLight) _selectLight(null)
         _selectBrush?.(mesh)
+        _focusCameraOnObject?.(mesh)
       }))
     })
     details.appendChild(sublist)
@@ -81,6 +84,7 @@ export function updateSceneList() {
     objectList.appendChild(makeButton(label, () => {
       if (_selectLight) _selectLight(null)
       _selectBrush?.(mesh)
+      _focusCameraOnObject?.(mesh)
     }))
   })
 
@@ -101,6 +105,7 @@ export function updateSceneList() {
     lightList.appendChild(makeButton(entry.label, () => {
       if (_selectBrush) _selectBrush(null)
       _selectLight?.(entry)
+      _focusCameraOnObject?.(entry.light)
     }))
   })
   container.appendChild(lightList)
