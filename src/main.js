@@ -3,6 +3,9 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { Sky } from 'three/addons/objects/Sky.js'
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { saveGlvl, loadGlvlFromFile } from './lib/glvl-io.js'
 import { loadGlbFromFile } from './lib/glb-io.js'
 import { generateMaze as generateMazeGrid } from './lib/maze-generator.js'
@@ -11,6 +14,7 @@ import { createInputHandler } from './lib/input-commands.js'
 
 const GRID_COLOR = 0x333333
 const OUTLINE_COLOR = 0xff8800
+let useLitMaterials = false
 
 // Only textures at palette root (excludes Fixtures). Format: { palette, file }
 const TEXTURE_POOL = [
@@ -25,8 +29,7 @@ const TEXTURE_POOL = [
 
 const textureLoader = new THREE.TextureLoader()
 const baseUrl = import.meta.env.BASE_URL
-const ARENA_TEXTURE_URL = `${baseUrl}textures/Light/texture_02.png`
-let arenaTextureCache = null
+const textureCacheByIndex = new Map()
 
 function getTextureUrl(index) {
   const { palette, file } = TEXTURE_POOL[index]
@@ -49,42 +52,99 @@ function loadTextureByIndex(index) {
   return tex
 }
 
-function getArenaTexture() {
-  if (arenaTextureCache) return arenaTextureCache
-  const tex = textureLoader.load(ARENA_TEXTURE_URL)
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
-  tex.colorSpace = THREE.SRGBColorSpace
-  tex.anisotropy = maxAnisotropy
-  tex.generateMipmaps = false
-  tex.minFilter = THREE.LinearFilter
-  tex.magFilter = THREE.LinearFilter
-  arenaTextureCache = tex
+function getTextureIndex(palette, file) {
+  const idx = TEXTURE_POOL.findIndex((entry) => entry.palette === palette && entry.file === file)
+  return idx >= 0 ? idx : 0
+}
+
+const TEXTURE_INDEX = {
+  mazeWall: getTextureIndex('Dark', 'texture_13.png'),
+  mazeFloor: getTextureIndex('Dark', 'texture_01.png'),
+  arenaBase: getTextureIndex('Dark', 'texture_01.png'),
+  arenaObstacle: getTextureIndex('Orange', 'texture_02.png'),
+}
+
+function getTextureByIndex(index) {
+  const clamped = Math.max(0, Math.min(index ?? 0, TEXTURE_POOL.length - 1))
+  if (textureCacheByIndex.has(clamped)) return textureCacheByIndex.get(clamped)
+  const tex = loadTextureByIndex(clamped)
+  if (typeof maxAnisotropy === 'number') tex.anisotropy = maxAnisotropy
+  textureCacheByIndex.set(clamped, tex)
   return tex
 }
 
 function resolveBrushTexture(textureInfo) {
-  if (textureInfo?.key === 'arena') return getArenaTexture()
-  if (typeof textureInfo?.index === 'number') return loadTextureByIndex(textureInfo.index)
+  if (textureInfo?.key === 'arena') return getTextureByIndex(TEXTURE_INDEX.arenaBase)
+  if (typeof textureInfo?.index === 'number') return getTextureByIndex(textureInfo.index)
   const index = getSelectedTextureIndex()
-  return loadTextureByIndex(index)
+  return getTextureByIndex(index)
 }
 
 function resolveBrushTextureInfo(textureInfo) {
-  if (textureInfo?.key === 'arena') return { key: 'arena' }
+  if (textureInfo?.key === 'arena') return { index: TEXTURE_INDEX.arenaBase }
   if (typeof textureInfo?.index === 'number') return { index: textureInfo.index }
   return { index: getSelectedTextureIndex() }
 }
 
-function applyArenaTexture(mesh) {
+function createBrushMaterial(texture, depthBias, lit) {
+  if (lit) {
+    return new THREE.MeshStandardMaterial({
+      map: texture,
+      flatShading: false,
+      polygonOffset: true,
+      polygonOffsetFactor: 2,
+      polygonOffsetUnits: depthBias,
+    })
+  }
+  return new THREE.MeshBasicMaterial({
+    map: texture,
+    polygonOffset: true,
+    polygonOffsetFactor: 2,
+    polygonOffsetUnits: depthBias,
+  })
+}
+
+function applyTextureIndex(mesh, index) {
   if (!mesh?.material) return
-  const tex = getArenaTexture()
+  const tex = getTextureByIndex(index)
   if (mesh.material.map && mesh.material.map !== tex) {
     mesh.material.map.dispose()
   }
   mesh.material.map = tex
   mesh.material.needsUpdate = true
-  mesh.userData.textureKey = 'arena'
-  mesh.userData.textureIndex = null
+  mesh.userData.textureKey = null
+  mesh.userData.textureIndex = index
+}
+
+function applyMazeWallTexture(mesh) {
+  applyTextureIndex(mesh, TEXTURE_INDEX.mazeWall)
+}
+
+function applyMazeFloorTexture(mesh) {
+  applyTextureIndex(mesh, TEXTURE_INDEX.mazeFloor)
+}
+
+function applyArenaBaseTexture(mesh) {
+  applyTextureIndex(mesh, TEXTURE_INDEX.arenaBase)
+}
+
+function applyArenaObstacleTexture(mesh) {
+  applyTextureIndex(mesh, TEXTURE_INDEX.arenaObstacle)
+}
+
+function updateBrushMaterials(lit) {
+  brushes.forEach((mesh) => {
+    if (!mesh?.material || mesh.userData?.isArenaPreview || mesh.userData?.isMazePreview) return
+    if (mesh.userData?.type === 'imported') return
+    const texture = mesh.material.map ?? null
+    const depthBias = mesh.material.polygonOffsetUnits ?? 0
+    const nextMaterial = createBrushMaterial(texture, depthBias, lit)
+    if (mesh.material.map && mesh.material.map !== texture) {
+      mesh.material.map.dispose()
+    }
+    mesh.material.dispose()
+    mesh.material = nextMaterial
+  })
 }
 
 function clamp(value, min, max) {
@@ -95,13 +155,14 @@ function clamp(value, min, max) {
 const viewport = document.getElementById('viewport')
 let pickRectElement = viewport
 const scene = new THREE.Scene()
-scene.background = new THREE.Color(0x1a1a1a)
+scene.background = new THREE.Color(0x000000)
 
 // Sky (Preetham model) - added as mesh so it can be toggled or edited
 const sky = new Sky()
 sky.scale.setScalar(450000)
 scene.add(sky)
 const sun = new THREE.Vector3()
+sky.visible = false
 
 const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 5000)
 camera.position.set(8, 8, 8)
@@ -160,6 +221,8 @@ orbitControls.dampingFactor = 0.05
 orbitControls.autoRotate = false
 orbitControls.autoRotateSpeed = 0
 orbitControls.enableZoom = false
+orbitControls.enableRotate = false
+orbitControls.enablePan = false
 
 const transformControls = new TransformControls(camera, renderer.domElement)
 transformControls.setSize(0.4)
@@ -219,6 +282,11 @@ let lastArenaPlacement = null
 let lastMazeBrushes = []
 let lastArenaBrushes = []
 let activeGenerationCollector = null
+let activeGenerationGroup = null
+let mazeGenerationCount = 0
+let arenaGenerationCount = 0
+let lastMazeGroupId = null
+let lastArenaGroupId = null
 
 function beginGenerationCollector() {
   activeGenerationCollector = []
@@ -228,6 +296,7 @@ function beginGenerationCollector() {
 function endGenerationCollector() {
   const collected = activeGenerationCollector ?? []
   activeGenerationCollector = null
+  activeGenerationGroup = null
   return collected
 }
 
@@ -236,6 +305,95 @@ function updateIterateButtons() {
   if (mazeBtn) mazeBtn.disabled = !lastMazeState
   const arenaBtn = document.getElementById('btn-iterate-arena')
   if (arenaBtn) arenaBtn.disabled = !lastArenaState
+}
+
+function updateSceneList() {
+  const container = document.getElementById('scene-list')
+  if (!container) return
+  container.innerHTML = ''
+
+  const makeLabel = (text) => {
+    const el = document.createElement('div')
+    el.className = 'scene-list-title'
+    el.textContent = text
+    return el
+  }
+
+  const makeButton = (label, onClick) => {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'scene-list-item'
+    btn.textContent = label
+    btn.addEventListener('click', onClick)
+    return btn
+  }
+
+  const shortId = (id) => (id ? String(id).slice(0, 8) : 'no-id')
+
+  const objectList = document.createElement('div')
+  const groups = new Map()
+  const loose = []
+
+  brushes.forEach((mesh) => {
+    if (!mesh || mesh.userData?.isArenaPreview || mesh.userData?.isMazePreview) return
+    if (!mesh.parent) return
+    const groupId = mesh.userData?.generatorGroup
+    const subtype = mesh.userData?.subtype
+    const labelBase = subtype ?? mesh.userData?.type ?? 'object'
+    const label = `${labelBase}_${shortId(mesh.userData?.id)}`
+    if (groupId) {
+      if (!groups.has(groupId)) groups.set(groupId, [])
+      groups.get(groupId).push({ mesh, label })
+    } else {
+      loose.push({ mesh, label })
+    }
+  })
+
+  if (groups.size > 0 || loose.length > 0) {
+    objectList.appendChild(makeLabel('Objects'))
+  }
+
+  Array.from(groups.keys()).sort().forEach((groupId) => {
+    const details = document.createElement('details')
+    details.className = 'scene-list-group'
+    details.open = false
+    const summary = document.createElement('summary')
+    summary.textContent = groupId
+    details.appendChild(summary)
+    const sublist = document.createElement('div')
+    sublist.className = 'scene-list-subitems'
+    groups.get(groupId).forEach(({ mesh, label }) => {
+      sublist.appendChild(makeButton(label, () => {
+        selectLight(null)
+        selectBrush(mesh)
+      }))
+    })
+    details.appendChild(sublist)
+    objectList.appendChild(details)
+  })
+
+  loose.forEach(({ mesh, label }) => {
+    objectList.appendChild(makeButton(label, () => {
+      selectLight(null)
+      selectBrush(mesh)
+    }))
+  })
+
+  container.appendChild(objectList)
+
+  const lightList = document.createElement('div')
+  if (lights.length > 0) {
+    lightList.appendChild(makeLabel('Lights'))
+  }
+  lights.forEach((entry, idx) => {
+    if (!entry?.light?.parent) return
+    const label = `${entry.type}_light_${String(idx + 1).padStart(2, '0')}`
+    lightList.appendChild(makeButton(label, () => {
+      selectBrush(null)
+      selectLight(entry)
+    }))
+  })
+  container.appendChild(lightList)
 }
 
 function updateMazePreviewVisibility() {
@@ -350,13 +508,7 @@ function createBrushMesh(size = [2, 2, 2], position = [0, 1, 0], depthBias = 0, 
   setBoxUVs(geometry, size[0], size[1], size[2])
   const resolvedInfo = resolveBrushTextureInfo(textureInfo)
   const texture = resolveBrushTexture(resolvedInfo)
-  const material = new THREE.MeshStandardMaterial({
-    map: texture,
-    flatShading: false,
-    polygonOffset: true,
-    polygonOffsetFactor: 2,
-    polygonOffsetUnits: depthBias,
-  })
+  const material = createBrushMaterial(texture, depthBias, useLitMaterials)
   const mesh = new THREE.Mesh(geometry, material)
   mesh.position.set(...position)
   mesh.castShadow = false
@@ -374,13 +526,7 @@ function createCylinderMesh(radius = 1, height = 2, position = [0, 1, 0], depthB
   setCylinderUVs(geometry, radius, height, 16, 1)
   const resolvedInfo = resolveBrushTextureInfo(textureInfo)
   const texture = resolveBrushTexture(resolvedInfo)
-  const material = new THREE.MeshStandardMaterial({
-    map: texture,
-    flatShading: false,
-    polygonOffset: true,
-    polygonOffsetFactor: 2,
-    polygonOffsetUnits: depthBias,
-  })
+  const material = createBrushMaterial(texture, depthBias, useLitMaterials)
   const mesh = new THREE.Mesh(geometry, material)
   mesh.position.set(...position)
   mesh.castShadow = false
@@ -406,6 +552,7 @@ function addBoxBrush() {
   selectBrush(mesh)
   setCurrentTool('translate')
   setTransformMode('translate')
+  updateSceneList()
 }
 
 function addCylinderBrush() {
@@ -421,6 +568,7 @@ function addCylinderBrush() {
   selectBrush(mesh)
   setCurrentTool('translate')
   setTransformMode('translate')
+  updateSceneList()
 }
 
 function addBrushMesh(size, position) {
@@ -428,6 +576,7 @@ function addBrushMesh(size, position) {
   mesh.userData.id = crypto.randomUUID()
   scene.add(mesh)
   brushes.push(mesh)
+  updateSceneList()
   return mesh
 }
 
@@ -510,6 +659,7 @@ function addPointLight() {
   selectLight(entry)
   setCurrentTool('translate')
   setTransformMode('translate')
+  updateSceneList()
 }
 
 function addSpotLight() {
@@ -529,6 +679,7 @@ function addSpotLight() {
   selectLight(entry)
   setCurrentTool('translate')
   setTransformMode('translate')
+  updateSceneList()
 }
 
 function addDirectionalLight() {
@@ -548,6 +699,7 @@ function addDirectionalLight() {
   selectLight(entry)
   setCurrentTool('translate')
   setTransformMode('translate')
+  updateSceneList()
 }
 
 function addAmbientLight() {
@@ -562,6 +714,7 @@ function addAmbientLight() {
   lights.push(entry)
   selectBrush(null)
   selectLight(entry)
+  updateSceneList()
 }
 
 function getLightHelpers() {
@@ -705,6 +858,7 @@ function deleteSelectedLight() {
     })
   }
   selectLight(null)
+  updateSceneList()
 }
 
 function updateSpotLightHelpers() {
@@ -826,9 +980,11 @@ function rotateArenaPoint(x, z, rotation) {
 
 function addMazeBrushMesh(size, position, rotation) {
   const mesh = addBrushMesh(size, position)
-  applyArenaTexture(mesh)
+  applyMazeWallTexture(mesh)
   mesh.userData.isUserBrush = false
   mesh.userData.generator = 'maze'
+  mesh.userData.subtype = 'maze-wall'
+  if (activeGenerationGroup) mesh.userData.generatorGroup = activeGenerationGroup
   if (rotation) mesh.rotation.copy(rotation)
   if (activeGenerationCollector) activeGenerationCollector.push(mesh)
   return mesh
@@ -836,8 +992,13 @@ function addMazeBrushMesh(size, position, rotation) {
 
 function addMazeFloor(width, depth, thickness, offset = [0, 0, 0], rotation = null) {
   const position = [offset[0], thickness / 2 + offset[1], offset[2]]
-  const mesh = addMazeBrushMesh([width, thickness, depth], position, rotation)
-  applyArenaTexture(mesh)
+  const mesh = addBrushMesh([width, thickness, depth], position)
+  applyMazeFloorTexture(mesh)
+  mesh.userData.isUserBrush = false
+  mesh.userData.generator = 'maze'
+  mesh.userData.subtype = 'maze-floor'
+  if (activeGenerationGroup) mesh.userData.generatorGroup = activeGenerationGroup
+  if (activeGenerationCollector) activeGenerationCollector.push(mesh)
   return mesh
 }
 
@@ -857,7 +1018,9 @@ function arenaGridToMeshes(grid, tileSize, wallHeight, offset = [0, 0, 0], rotat
       const pz = rotated.z + offZ
       const mesh = addBrushMesh([tileSize, wallHeight, tileSize], [px, wallHeight / 2 + offY, pz])
       mesh.userData.generator = 'arena'
-      applyArenaTexture(mesh)
+      mesh.userData.subtype = 'arena-wall'
+      if (activeGenerationGroup) mesh.userData.generatorGroup = activeGenerationGroup
+      applyArenaBaseTexture(mesh)
       if (rotation) mesh.rotation.copy(rotation)
       if (activeGenerationCollector) activeGenerationCollector.push(mesh)
     }
@@ -930,6 +1093,9 @@ function generateMaze() {
   pushUndoState()
   if (!updateMazePreviewValidity()) return
 
+  mazeGenerationCount += 1
+  lastMazeGroupId = `maze_${String(mazeGenerationCount).padStart(2, '0')}`
+  activeGenerationGroup = lastMazeGroupId
   const ctrl = getMazeControls()
   let mazeResult = generateMazeGrid({
     cols: ctrl.cols,
@@ -988,14 +1154,17 @@ function generateMaze() {
   if (mazePreview) mazePreview.visible = false
 
   selectBrush(null)
+  updateSceneList()
 }
 
 function addArenaMarkerCylinder(radius, height, position) {
   const mesh = createCylinderMesh(radius, height, position, brushes.length * 4, { key: 'arena' })
-  applyArenaTexture(mesh)
+  applyArenaBaseTexture(mesh)
   mesh.userData.id = crypto.randomUUID()
   mesh.userData.isUserBrush = false
   mesh.userData.generator = 'arena'
+  mesh.userData.subtype = 'arena-marker'
+  if (activeGenerationGroup) mesh.userData.generatorGroup = activeGenerationGroup
   mesh.castShadow = false
   mesh.receiveShadow = false
   scene.add(mesh)
@@ -1006,10 +1175,12 @@ function addArenaMarkerCylinder(radius, height, position) {
 
 function addArenaCover(size, position) {
   const mesh = createBrushMesh(size, position, brushes.length * 4, { key: 'arena' })
-  applyArenaTexture(mesh)
+  applyArenaObstacleTexture(mesh)
   mesh.userData.id = crypto.randomUUID()
   mesh.userData.isUserBrush = false
   mesh.userData.generator = 'arena'
+  mesh.userData.subtype = 'arena-obstacle'
+  if (activeGenerationGroup) mesh.userData.generatorGroup = activeGenerationGroup
   mesh.castShadow = false
   mesh.receiveShadow = false
   scene.add(mesh)
@@ -1020,7 +1191,7 @@ function addArenaCover(size, position) {
 
 function createArenaPreviewMesh(size, position) {
   const geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
-  const material = new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshBasicMaterial({
     color: 0xff3333,
     transparent: true,
     opacity: 0.25,
@@ -1076,6 +1247,7 @@ function updateArenaPreviewFromControls() {
   preview.userData.size = [...size]
   preview.userData.arenaCols = ctrl.cols
   preview.userData.arenaRows = ctrl.rows
+  refreshOutline(preview)
   if (!preview.position || Number.isNaN(preview.position.y)) {
     preview.position.set(0, ctrl.wallHeight / 2, 0)
   }
@@ -1083,7 +1255,7 @@ function updateArenaPreviewFromControls() {
 
 function createMazePreviewMesh(size, position) {
   const geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
-  const material = new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshBasicMaterial({
     color: 0xff3333,
     transparent: true,
     opacity: 0.25,
@@ -1132,6 +1304,7 @@ function updateMazePreviewFromControls() {
   preview.userData.size = [...size]
   preview.userData.mazeCols = ctrl.cols
   preview.userData.mazeRows = ctrl.rows
+  refreshOutline(preview)
   if (!preview.position || Number.isNaN(preview.position.y)) {
     preview.position.set(0, ctrl.wallHeight / 2, 0)
   }
@@ -1186,7 +1359,12 @@ function syncArenaControlsFromPreview(preview, scale) {
   if (!preview) return
   const tileSize = parseFloat(document.getElementById('arena-tile')?.value ?? '1')
   if (!tileSize || Number.isNaN(tileSize)) return
-  const wallHeight = parseFloat(document.getElementById('arena-height')?.value ?? '1')
+  const wallHeightInput = document.getElementById('arena-height')
+  const wallHeightValueEl = document.getElementById('arena-height-value')
+  const wallHeight = parseFloat(wallHeightInput?.value ?? '1')
+  const currentHeight = preview.userData.size?.[1] ?? wallHeight
+  const scaledHeight = currentHeight * scale.y
+  const baseOffset = getPreviewBaseOffset(preview, scaledHeight)
   const colsEl = document.getElementById('arena-cols')
   const rowsEl = document.getElementById('arena-rows')
   const colsValueEl = document.getElementById('arena-cols-value')
@@ -1204,20 +1382,45 @@ function syncArenaControlsFromPreview(preview, scale) {
   rowsEl.value = String(nextRows)
   if (colsValueEl) colsValueEl.textContent = String(nextCols)
   if (rowsValueEl) rowsValueEl.textContent = String(nextRows)
-  const size = [nextCols * tileSize, wallHeight, nextRows * tileSize]
+  let nextWallHeight = wallHeight
+  if (wallHeightInput) {
+    const minHeight = parseFloat(wallHeightInput.min ?? '0')
+    const maxHeight = parseFloat(wallHeightInput.max ?? '999')
+    const baseHeight = preview.userData.size?.[1] ?? wallHeight
+    nextWallHeight = clamp(baseHeight * scale.y, minHeight, maxHeight)
+    wallHeightInput.value = String(nextWallHeight)
+    if (wallHeightValueEl) wallHeightValueEl.textContent = String(nextWallHeight)
+  }
+  const obstacleInput = document.getElementById('arena-obstacle-height')
+  const obstacleValueEl = document.getElementById('arena-obstacle-height-value')
+  if (obstacleInput) {
+    obstacleInput.max = String(nextWallHeight)
+    const obstacleValue = parseFloat(obstacleInput.value)
+    if (obstacleValue > nextWallHeight) {
+      obstacleInput.value = String(nextWallHeight)
+      if (obstacleValueEl) obstacleValueEl.textContent = String(nextWallHeight)
+    }
+  }
+  const size = [nextCols * tileSize, nextWallHeight, nextRows * tileSize]
   preview.geometry.dispose()
   preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
   preview.userData.size = [...size]
   preview.userData.arenaCols = nextCols
   preview.userData.arenaRows = nextRows
-  preview.position.y = wallHeight / 2
+  refreshOutline(preview)
+  preview.position.set(baseOffset[0], baseOffset[1] + nextWallHeight / 2, baseOffset[2])
 }
 
 function syncMazeControlsFromPreview(preview, scale) {
   if (!preview) return
   const spaceBetweenWalls = parseFloat(document.getElementById('maze-space')?.value ?? '1')
   if (!spaceBetweenWalls || Number.isNaN(spaceBetweenWalls)) return
-  const wallHeight = parseFloat(document.getElementById('maze-height')?.value ?? '1')
+  const wallHeightInput = document.getElementById('maze-height')
+  const wallHeightValueEl = document.getElementById('maze-height-value')
+  const wallHeight = parseFloat(wallHeightInput?.value ?? '1')
+  const currentHeight = preview.userData.size?.[1] ?? wallHeight
+  const scaledHeight = currentHeight * scale.y
+  const baseOffset = getPreviewBaseOffset(preview, scaledHeight)
   const colsEl = document.getElementById('maze-cols')
   const rowsEl = document.getElementById('maze-rows')
   const colsValueEl = document.getElementById('maze-cols-value')
@@ -1235,17 +1438,27 @@ function syncMazeControlsFromPreview(preview, scale) {
   rowsEl.value = String(nextRows)
   if (colsValueEl) colsValueEl.textContent = String(nextCols)
   if (rowsValueEl) rowsValueEl.textContent = String(nextRows)
+  let nextWallHeight = wallHeight
+  if (wallHeightInput) {
+    const minHeight = parseFloat(wallHeightInput.min ?? '0')
+    const maxHeight = parseFloat(wallHeightInput.max ?? '999')
+    const baseHeight = preview.userData.size?.[1] ?? wallHeight
+    nextWallHeight = clamp(baseHeight * scale.y, minHeight, maxHeight)
+    wallHeightInput.value = String(nextWallHeight)
+    if (wallHeightValueEl) wallHeightValueEl.textContent = String(nextWallHeight)
+  }
   const w = nextCols * 2 + 1
   const h = nextRows * 2 + 1
   const width = (w - 1) * spaceBetweenWalls
   const depth = (h - 1) * spaceBetweenWalls
-  const size = [width, wallHeight, depth]
+  const size = [width, nextWallHeight, depth]
   preview.geometry.dispose()
   preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
   preview.userData.size = [...size]
   preview.userData.mazeCols = nextCols
   preview.userData.mazeRows = nextRows
-  preview.position.y = wallHeight / 2
+  refreshOutline(preview)
+  preview.position.set(baseOffset[0], baseOffset[1] + nextWallHeight / 2, baseOffset[2])
 }
 
 function addArenaFloor(cols, rows, tileSize, offset = [0, 0, 0], rotation = null) {
@@ -1253,8 +1466,20 @@ function addArenaFloor(cols, rows, tileSize, offset = [0, 0, 0], rotation = null
   const width = cols * tileSize
   const depth = rows * tileSize
   const position = [offset[0], thickness / 2 + offset[1], offset[2]]
-  const mesh = addArenaCover([width, thickness, depth], position)
+  const mesh = createBrushMesh([width, thickness, depth], position, brushes.length * 4, {
+    index: TEXTURE_INDEX.arenaBase,
+  })
+  applyArenaBaseTexture(mesh)
+  mesh.userData.id = crypto.randomUUID()
+  mesh.userData.isUserBrush = false
   mesh.userData.generator = 'arena'
+  mesh.userData.subtype = 'arena-floor'
+  if (activeGenerationGroup) mesh.userData.generatorGroup = activeGenerationGroup
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  scene.add(mesh)
+  brushes.push(mesh)
+  if (activeGenerationCollector) activeGenerationCollector.push(mesh)
   if (rotation) mesh.rotation.copy(rotation)
   return mesh
 }
@@ -1316,6 +1541,9 @@ function generateArena() {
   pushUndoState()
   if (!updateArenaPreviewValidity()) return
 
+  arenaGenerationCount += 1
+  lastArenaGroupId = `arena_${String(arenaGenerationCount).padStart(2, '0')}`
+  activeGenerationGroup = lastArenaGroupId
   const ctrl = getArenaControls()
   let arena = generateArenaGrid({
     cols: ctrl.cols,
@@ -1364,6 +1592,7 @@ function generateArena() {
   if (arenaPreview) arenaPreview.visible = false
 
   selectBrush(null)
+  updateSceneList()
 }
 
 function regenerateMazeFromLast() {
@@ -1372,6 +1601,7 @@ function regenerateMazeFromLast() {
   removeGeneratedBrushes(lastMazeBrushes)
 
   const ctrl = getMazeControls()
+  activeGenerationGroup = lastMazeGroupId
   beginGenerationCollector()
   let mazeResult = generateMazeGrid({
     cols: ctrl.cols,
@@ -1418,6 +1648,7 @@ function regenerateMazeFromLast() {
   updateIterateButtons()
 
   selectBrush(null)
+  updateSceneList()
 }
 
 function regenerateArenaFromLast() {
@@ -1426,6 +1657,7 @@ function regenerateArenaFromLast() {
   removeGeneratedBrushes(lastArenaBrushes)
 
   const ctrl = getArenaControls()
+  activeGenerationGroup = lastArenaGroupId
   beginGenerationCollector()
   let arena = generateArenaGrid({
     cols: ctrl.cols,
@@ -1471,16 +1703,20 @@ function regenerateArenaFromLast() {
   updateIterateButtons()
 
   selectBrush(null)
+  updateSceneList()
 }
 function addOutline(mesh) {
   if (mesh.userData.outline) return
-  const outlineGeom = mesh.geometry.clone()
-  const outlineMat = new THREE.MeshBasicMaterial({
+  const edges = new THREE.EdgesGeometry(mesh.geometry, 1)
+  const outlineGeom = new LineSegmentsGeometry()
+  outlineGeom.fromEdgesGeometry(edges)
+  edges.dispose()
+  const outlineMat = new LineMaterial({
     color: OUTLINE_COLOR,
-    side: THREE.BackSide,
+    linewidth: outlineWidth,
   })
-  const outline = new THREE.Mesh(outlineGeom, outlineMat)
-  outline.scale.setScalar(1.02)
+  outlineMat.resolution.set(viewport.clientWidth, viewport.clientHeight)
+  const outline = new LineSegments2(outlineGeom, outlineMat)
   outline.userData.isOutline = true
   mesh.add(outline)
   mesh.userData.outline = outline
@@ -1494,6 +1730,26 @@ function removeOutline(mesh) {
     outline.material.dispose()
     mesh.userData.outline = null
   }
+}
+
+function refreshOutline(mesh) {
+  const outline = mesh?.userData?.outline
+  if (!outline) return
+  outline.geometry.dispose()
+  const edges = new THREE.EdgesGeometry(mesh.geometry, 1)
+  const outlineGeom = new LineSegmentsGeometry()
+  outlineGeom.fromEdgesGeometry(edges)
+  edges.dispose()
+  outline.geometry = outlineGeom
+}
+
+function updateOutlineResolution(width, height) {
+  brushes.forEach((brush) => {
+    const outline = brush?.userData?.outline
+    if (outline?.material?.resolution) {
+      outline.material.resolution.set(width, height)
+    }
+  })
 }
 
 function selectBrush(mesh) {
@@ -1548,6 +1804,7 @@ function cloneBrush(mesh) {
   clone.rotation.fromArray(rotation)
   scene.add(clone)
   brushes.push(clone)
+  updateSceneList()
   return clone
 }
 
@@ -1563,6 +1820,7 @@ function deleteSelected() {
   selectedBrush.material.map?.dispose()
   selectedBrush.material.dispose()
   selectBrush(null)
+  updateSceneList()
 }
 
 // Raycast for click selection
@@ -1659,19 +1917,13 @@ function bakeScaleIntoGeometry(mesh) {
   if (mesh.userData.isArenaPreview) {
     syncArenaControlsFromPreview(mesh, s)
     mesh.scale.set(1, 1, 1)
-    if (outline) {
-      outline.geometry.dispose()
-      outline.geometry = mesh.geometry.clone()
-    }
+    if (outline) refreshOutline(mesh)
     return
   }
   if (mesh.userData.isMazePreview) {
     syncMazeControlsFromPreview(mesh, s)
     mesh.scale.set(1, 1, 1)
-    if (outline) {
-      outline.geometry.dispose()
-      outline.geometry = mesh.geometry.clone()
-    }
+    if (outline) refreshOutline(mesh)
     return
   }
 
@@ -1799,7 +2051,6 @@ function serializeLevel() {
       }
       return base
     }),
-    skybox: getSkyboxState(),
   }
 }
 
@@ -1909,9 +2160,9 @@ function deserializeLevel(data) {
 
   updateSpotLightHelpers()
   updateDirectionalLightHelpers()
-  if (data.skybox) setSkyboxState(data.skybox)
   selectBrush(null)
   selectLight(null)
+  updateSceneList()
 }
 
 async function saveLevel() {
@@ -1937,6 +2188,7 @@ function addImportedMeshes(meshes) {
     brushes.push(mesh)
   })
   selectBrush(null)
+  updateSceneList()
 }
 
 function loadLevelFromFile() {
@@ -2010,6 +2262,9 @@ function setEditorMode(mode) {
   mazeControls.classList.toggle('hidden', mode !== 'maze')
   arenaControls.classList.toggle('hidden', mode !== 'arena')
   skyboxControls.classList.toggle('hidden', mode !== 'skybox')
+  sky.visible = mode === 'skybox'
+  useLitMaterials = mode === 'skybox'
+  updateBrushMaterials(useLitMaterials)
   if (mode === 'arena') {
     updateArenaPreviewFromControls()
     updateArenaPreviewValidity()
@@ -2024,11 +2279,15 @@ function setEditorMode(mode) {
     if (arenaPreview) arenaPreview.visible = false
     setCurrentTool('translate')
     setTransformMode('translate')
-  } else if (arenaPreview) {
-    arenaPreview.visible = false
-    if (selectedBrush === arenaPreview) selectBrush(null)
-    if (mazePreview) mazePreview.visible = false
-    if (selectedBrush === mazePreview) selectBrush(null)
+  } else {
+    if (arenaPreview) {
+      arenaPreview.visible = false
+      if (selectedBrush === arenaPreview) selectBrush(null)
+    }
+    if (mazePreview) {
+      mazePreview.visible = false
+      if (selectedBrush === mazePreview) selectBrush(null)
+    }
   }
 }
 
@@ -2156,10 +2415,45 @@ if (cameraFlySpeedInput) {
   applyCameraFlySpeed()
 }
 
+const outlineWidthInput = document.getElementById('outline-width')
+const outlineWidthValue = document.getElementById('outline-width-value')
+let outlineWidth = 2
+function applyOutlineWidth() {
+  if (!outlineWidthInput) return
+  const value = parseFloat(outlineWidthInput.value)
+  outlineWidth = Number.isFinite(value) ? value : 0
+  if (outlineWidthValue) outlineWidthValue.textContent = outlineWidthInput.value
+  brushes.forEach((brush) => {
+    const outline = brush?.userData?.outline
+    if (outline?.material && 'linewidth' in outline.material) {
+      outline.material.linewidth = outlineWidth
+      outline.material.needsUpdate = true
+    }
+  })
+}
+if (outlineWidthInput) {
+  outlineWidthInput.addEventListener('input', applyOutlineWidth)
+  applyOutlineWidth()
+}
+
 // --- Fly movement (WASD + LMB) ---
 const flyKeys = { w: false, a: false, s: false, d: false, q: false, e: false }
 let flyMouseDown = false
 let lastFlyTime = performance.now()
+let isLooking = false
+let lookYaw = camera.rotation.y
+let lookPitch = camera.rotation.x
+const LOOK_SENSITIVITY = 0.002
+let lastLookX = null
+let lastLookY = null
+const lockElement = renderer.domElement
+
+function updateLookTarget() {
+  const distance = camera.position.distanceTo(orbitControls.target) || 1
+  const forward = new THREE.Vector3()
+  camera.getWorldDirection(forward)
+  orbitControls.target.copy(camera.position).addScaledVector(forward, distance)
+}
 
 function shouldIgnoreKeyInput() {
   const active = document.activeElement
@@ -2167,15 +2461,52 @@ function shouldIgnoreKeyInput() {
 }
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (e.button === 0) flyMouseDown = true
+  if (e.button === 0) {
+    flyMouseDown = true
+    if (!isTransformDragging) {
+      lockElement.requestPointerLock?.()
+    }
+  }
 })
 
 document.addEventListener('pointerup', (e) => {
   if (e.button === 0) flyMouseDown = false
+  if (e.button === 0) document.exitPointerLock?.()
+  lastLookX = null
+  lastLookY = null
 })
 
 document.addEventListener('pointercancel', () => {
   flyMouseDown = false
+  document.exitPointerLock?.()
+  lastLookX = null
+  lastLookY = null
+})
+
+renderer.domElement.addEventListener('contextmenu', (e) => {
+  e.preventDefault()
+})
+
+document.addEventListener('pointerlockchange', () => {
+  isLooking = document.pointerLockElement === lockElement
+  if (isLooking) {
+    lookYaw = camera.rotation.y
+    lookPitch = camera.rotation.x
+  }
+})
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!isLooking) return
+  const dx = e.movementX ?? 0
+  const dy = e.movementY ?? 0
+  lookYaw -= dx * LOOK_SENSITIVITY
+  lookPitch -= dy * LOOK_SENSITIVITY
+  const limit = Math.PI / 2 - 0.01
+  lookPitch = Math.max(-limit, Math.min(limit, lookPitch))
+  camera.rotation.order = 'YXZ'
+  camera.rotation.y = lookYaw
+  camera.rotation.x = lookPitch
+  updateLookTarget()
 })
 
 document.addEventListener('keydown', (e) => {
@@ -2277,6 +2608,7 @@ const inputHandler = createInputHandler({
   deleteSelectedLight,
 })
 updateLightControls()
+updateSceneList()
 
 // --- Texture dropdown ---
 const textureSelect = document.getElementById('texture-select')
@@ -2397,6 +2729,7 @@ const resizeObserver = new ResizeObserver(() => {
   camera.aspect = w / h
   camera.updateProjectionMatrix()
   renderer.setSize(w, h)
+  updateOutlineResolution(w, h)
 })
 resizeObserver.observe(viewport)
 

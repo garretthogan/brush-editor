@@ -177,9 +177,11 @@ body {
 #camera-controls {
   position: absolute;
   top: 48px;
+  bottom: auto;
   right: 12px;
   z-index: 10;
-  min-width: 180px;
+  width: 280px;
+  box-sizing: border-box;
   padding: 0.5rem 0.75rem;
   background: rgba(22, 22, 22, 0.95);
   border: 1px solid #2a2a2a;
@@ -188,6 +190,20 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+#camera-controls .control-row label {
+  min-width: 90px;
+}
+
+#camera-controls .control-row input[type="range"] {
+  flex: 1 1 120px;
+  max-width: 160px;
+}
+
+#camera-controls .control-row span {
+  min-width: 32px;
+  text-align: right;
 }
 
 .camera-controls-title {
@@ -276,6 +292,66 @@ body {
   background: #3a3a3a;
   margin: 0.5rem 0;
   flex-shrink: 0;
+}
+
+.scene-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.scene-list-title {
+  font-size: 0.75rem;
+  color: #9a9a9a;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.scene-list-content {
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.scene-list-item,
+.scene-list-group > summary {
+  font-size: 0.8rem;
+  color: #e0e0e0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.scene-list-item {
+  background: #232323;
+  border: 1px solid #2f2f2f;
+  border-radius: 4px;
+  padding: 0.3rem 0.45rem;
+  text-align: left;
+}
+
+.scene-list-item:hover {
+  border-color: #4a9eff;
+}
+
+.scene-list-group {
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  padding: 0.25rem 0.35rem;
+  background: #1f1f1f;
+}
+
+.scene-list-group[open] > summary {
+  margin-bottom: 0.35rem;
+}
+
+.scene-list-subitems {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
 #panel-maze-settings,
@@ -394,7 +470,9 @@ body {
 
 .control-row select {
   flex: 1;
-  max-width: 180px;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 0.35rem 0.5rem;
   font-size: 0.85rem;
   font-family: inherit;
@@ -454,7 +532,8 @@ body {
 #pick-debug {
   position: absolute;
   right: 8px;
-  top: 8px;
+  bottom: 8px;
+  top: auto;
   z-index: 9;
   padding: 6px 8px;
   border-radius: 4px;

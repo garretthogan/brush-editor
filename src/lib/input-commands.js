@@ -165,7 +165,6 @@ export function createInputHandler(ctx) {
     }
     const lightEntry = ctx.pickLight ? ctx.pickLight(e) : null
     const brush = ctx.pickBrush(e)
-    if (ctx.reportPick) ctx.reportPick({ brush, lightEntry, target: e.target })
     if (lightEntry && ctx.selectLight) {
       ctx.selectBrush(null)
       ctx.selectLight(lightEntry)
@@ -186,6 +185,7 @@ export function createInputHandler(ctx) {
       ctx.selectBrush(null)
       if (ctx.selectLight) ctx.selectLight(null)
     }
+    if (ctx.reportPick) ctx.reportPick({ brush, lightEntry, target: e.target })
   }
 
   document.addEventListener('pointerdown', handleSelect)
