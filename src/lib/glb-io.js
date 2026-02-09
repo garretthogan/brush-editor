@@ -97,6 +97,10 @@ export async function saveGlb(objects, options = {}) {
     clone.traverse((child) => {
       if (child.userData?.isOutline) {
         child.parent?.remove(child)
+        return
+      }
+      if (child.userData?.outline) {
+        delete child.userData.outline
       }
     })
     scene.add(clone)
