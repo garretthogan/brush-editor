@@ -32,6 +32,8 @@ import { createInputHandler } from './lib/input-commands.js'
 
 const GRID_COLOR = 0x333333
 const OUTLINE_COLOR = 0xff8800
+/** 1 scene unit = 1 meter = this many cm. Length controls use cm; divide by this to get units. */
+const CM_PER_UNIT = 100
 let useLitMaterials = false
 const baseUrl = import.meta.env.BASE_URL
 
@@ -764,9 +766,9 @@ function getMazeControls() {
   return {
     cols: parseInt(document.getElementById('maze-cols').value, 10),
     rows: parseInt(document.getElementById('maze-rows').value, 10),
-    spaceBetweenWalls: parseFloat(document.getElementById('maze-space').value),
-    wallThickness: parseFloat(document.getElementById('maze-thickness').value),
-    wallHeight: parseFloat(document.getElementById('maze-height').value),
+    spaceBetweenWalls: parseFloat(document.getElementById('maze-space').value) / CM_PER_UNIT,
+    wallThickness: parseFloat(document.getElementById('maze-thickness').value) / CM_PER_UNIT,
+    wallHeight: parseFloat(document.getElementById('maze-height').value) / CM_PER_UNIT,
     exitWidth: parseInt(document.getElementById('maze-exit-width').value, 10),
     centerRoomSize: parseInt(document.getElementById('maze-center-size').value, 10),
     layout: document.getElementById('maze-start-from-center').checked ? 'center-out' : 'out-out',
@@ -774,13 +776,14 @@ function getMazeControls() {
 }
 
 function getArenaControls() {
-  const wallHeight = parseFloat(document.getElementById('arena-height').value)
-  const obstacleRaw = parseFloat(document.getElementById('arena-obstacle-height').value)
-  const obstacleHeight = Math.min(obstacleRaw, wallHeight)
+  const wallHeightCm = parseFloat(document.getElementById('arena-height').value)
+  const obstacleCm = parseFloat(document.getElementById('arena-obstacle-height').value)
+  const wallHeight = wallHeightCm / CM_PER_UNIT
+  const obstacleHeight = Math.min(obstacleCm, wallHeightCm) / CM_PER_UNIT
   return {
     cols: parseInt(document.getElementById('arena-cols').value, 10),
     rows: parseInt(document.getElementById('arena-rows').value, 10),
-    tileSize: parseFloat(document.getElementById('arena-tile').value),
+    tileSize: parseFloat(document.getElementById('arena-tile').value) / CM_PER_UNIT,
     wallHeight,
     obstacleHeight,
     density: parseFloat(document.getElementById('arena-density').value),
@@ -846,6 +849,9 @@ function addMazeBrushMesh(size, position, rotation) {
   mesh.userData.generator = 'maze'
   mesh.userData.subtype = 'maze-wall'
   if (activeGenerationGroup) mesh.userData.generatorGroup = activeGenerationGroup
+  mesh.name = activeGenerationGroup
+    ? `${activeGenerationGroup}_maze-wall_${String(mesh.userData.id ?? '').slice(0, 8) || 'no-id'}`
+    : `maze-wall_${String(mesh.userData.id ?? '').slice(0, 8) || 'no-id'}`
   if (rotation) mesh.rotation.copy(rotation)
   if (activeGenerationCollector) activeGenerationCollector.push(mesh)
   return mesh
@@ -859,6 +865,9 @@ function addMazeFloor(width, depth, thickness, offset = [0, 0, 0], rotation = nu
   mesh.userData.generator = 'maze'
   mesh.userData.subtype = 'maze-floor'
   if (activeGenerationGroup) mesh.userData.generatorGroup = activeGenerationGroup
+  mesh.name = activeGenerationGroup
+    ? `${activeGenerationGroup}_maze-floor_${String(mesh.userData.id ?? '').slice(0, 8) || 'no-id'}`
+    : `maze-floor_${String(mesh.userData.id ?? '').slice(0, 8) || 'no-id'}`
   if (activeGenerationCollector) activeGenerationCollector.push(mesh)
   return mesh
 }
@@ -1218,14 +1227,15 @@ function snapScaledCount(count, scale, min, max) {
 
 function syncArenaControlsFromPreview(preview, scale) {
   if (!preview) return
-  const tileSize = parseFloat(document.getElementById('arena-tile')?.value ?? '1')
-  if (!tileSize || Number.isNaN(tileSize)) return
+  const tileSizeCm = parseFloat(document.getElementById('arena-tile')?.value ?? '100')
+  if (!tileSizeCm || Number.isNaN(tileSizeCm)) return
+  const tileSize = tileSizeCm / CM_PER_UNIT
   const wallHeightInput = document.getElementById('arena-height')
   const wallHeightValueEl = document.getElementById('arena-height-value')
-  const wallHeight = parseFloat(wallHeightInput?.value ?? '1')
-  const currentHeight = preview.userData.size?.[1] ?? wallHeight
-  const scaledHeight = currentHeight * scale.y
-  const baseOffset = getPreviewBaseOffset(preview, scaledHeight)
+  const wallHeightCm = parseFloat(wallHeightInput?.value ?? '100')
+  const wallHeightUnits = preview.userData.size?.[1] ?? wallHeightCm / CM_PER_UNIT
+  const scaledHeightUnits = wallHeightUnits * scale.y
+  const baseOffset = getPreviewBaseOffset(preview, scaledHeightUnits)
   const colsEl = document.getElementById('arena-cols')
   const rowsEl = document.getElementById('arena-rows')
   const colsValueEl = document.getElementById('arena-cols-value')
@@ -1243,45 +1253,49 @@ function syncArenaControlsFromPreview(preview, scale) {
   rowsEl.value = String(nextRows)
   if (colsValueEl) colsValueEl.textContent = String(nextCols)
   if (rowsValueEl) rowsValueEl.textContent = String(nextRows)
-  let nextWallHeight = wallHeight
+  let nextWallHeightCm = wallHeightCm
   if (wallHeightInput) {
-    const minHeight = parseFloat(wallHeightInput.min ?? '0')
-    const maxHeight = parseFloat(wallHeightInput.max ?? '999')
-    const baseHeight = preview.userData.size?.[1] ?? wallHeight
-    nextWallHeight = clamp(baseHeight * scale.y, minHeight, maxHeight)
-    wallHeightInput.value = String(nextWallHeight)
-    if (wallHeightValueEl) wallHeightValueEl.textContent = String(nextWallHeight)
+    const minHeightCm = parseFloat(wallHeightInput.min ?? '0')
+    const maxHeightCm = parseFloat(wallHeightInput.max ?? '999')
+    const baseHeightUnits = preview.userData.size?.[1] ?? wallHeightCm / CM_PER_UNIT
+    const nextWallHeightUnits = clamp(baseHeightUnits * scale.y, minHeightCm / CM_PER_UNIT, maxHeightCm / CM_PER_UNIT)
+    nextWallHeightCm = Math.round(nextWallHeightUnits * CM_PER_UNIT)
+    nextWallHeightCm = clamp(nextWallHeightCm, minHeightCm, maxHeightCm)
+    wallHeightInput.value = String(nextWallHeightCm)
+    if (wallHeightValueEl) wallHeightValueEl.textContent = String(nextWallHeightCm)
   }
   const obstacleInput = document.getElementById('arena-obstacle-height')
   const obstacleValueEl = document.getElementById('arena-obstacle-height-value')
   if (obstacleInput) {
-    obstacleInput.max = String(nextWallHeight)
-    const obstacleValue = parseFloat(obstacleInput.value)
-    if (obstacleValue > nextWallHeight) {
-      obstacleInput.value = String(nextWallHeight)
-      if (obstacleValueEl) obstacleValueEl.textContent = String(nextWallHeight)
+    obstacleInput.max = String(nextWallHeightCm)
+    const obstacleValueCm = parseFloat(obstacleInput.value)
+    if (obstacleValueCm > nextWallHeightCm) {
+      obstacleInput.value = String(nextWallHeightCm)
+      if (obstacleValueEl) obstacleValueEl.textContent = String(nextWallHeightCm)
     }
   }
-  const size = [nextCols * tileSize, nextWallHeight, nextRows * tileSize]
+  const nextWallHeightUnits = nextWallHeightCm / CM_PER_UNIT
+  const size = [nextCols * tileSize, nextWallHeightUnits, nextRows * tileSize]
   preview.geometry.dispose()
   preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
   preview.userData.size = [...size]
   preview.userData.arenaCols = nextCols
   preview.userData.arenaRows = nextRows
   refreshOutline(preview)
-  preview.position.set(baseOffset[0], baseOffset[1] + nextWallHeight / 2, baseOffset[2])
+  preview.position.set(baseOffset[0], baseOffset[1] + nextWallHeightUnits / 2, baseOffset[2])
 }
 
 function syncMazeControlsFromPreview(preview, scale) {
   if (!preview) return
-  const spaceBetweenWalls = parseFloat(document.getElementById('maze-space')?.value ?? '1')
-  if (!spaceBetweenWalls || Number.isNaN(spaceBetweenWalls)) return
+  const spaceBetweenWallsCm = parseFloat(document.getElementById('maze-space')?.value ?? '100')
+  if (!spaceBetweenWallsCm || Number.isNaN(spaceBetweenWallsCm)) return
+  const spaceBetweenWalls = spaceBetweenWallsCm / CM_PER_UNIT
   const wallHeightInput = document.getElementById('maze-height')
   const wallHeightValueEl = document.getElementById('maze-height-value')
-  const wallHeight = parseFloat(wallHeightInput?.value ?? '1')
-  const currentHeight = preview.userData.size?.[1] ?? wallHeight
-  const scaledHeight = currentHeight * scale.y
-  const baseOffset = getPreviewBaseOffset(preview, scaledHeight)
+  const wallHeightCm = parseFloat(wallHeightInput?.value ?? '100')
+  const wallHeightUnits = preview.userData.size?.[1] ?? wallHeightCm / CM_PER_UNIT
+  const scaledHeightUnits = wallHeightUnits * scale.y
+  const baseOffset = getPreviewBaseOffset(preview, scaledHeightUnits)
   const colsEl = document.getElementById('maze-cols')
   const rowsEl = document.getElementById('maze-rows')
   const colsValueEl = document.getElementById('maze-cols-value')
@@ -1299,27 +1313,30 @@ function syncMazeControlsFromPreview(preview, scale) {
   rowsEl.value = String(nextRows)
   if (colsValueEl) colsValueEl.textContent = String(nextCols)
   if (rowsValueEl) rowsValueEl.textContent = String(nextRows)
-  let nextWallHeight = wallHeight
+  let nextWallHeightCm = wallHeightCm
   if (wallHeightInput) {
-    const minHeight = parseFloat(wallHeightInput.min ?? '0')
-    const maxHeight = parseFloat(wallHeightInput.max ?? '999')
-    const baseHeight = preview.userData.size?.[1] ?? wallHeight
-    nextWallHeight = clamp(baseHeight * scale.y, minHeight, maxHeight)
-    wallHeightInput.value = String(nextWallHeight)
-    if (wallHeightValueEl) wallHeightValueEl.textContent = String(nextWallHeight)
+    const minHeightCm = parseFloat(wallHeightInput.min ?? '0')
+    const maxHeightCm = parseFloat(wallHeightInput.max ?? '999')
+    const baseHeightUnits = preview.userData.size?.[1] ?? wallHeightCm / CM_PER_UNIT
+    const nextWallHeightUnits = clamp(baseHeightUnits * scale.y, minHeightCm / CM_PER_UNIT, maxHeightCm / CM_PER_UNIT)
+    nextWallHeightCm = Math.round(nextWallHeightUnits * CM_PER_UNIT)
+    nextWallHeightCm = clamp(nextWallHeightCm, minHeightCm, maxHeightCm)
+    wallHeightInput.value = String(nextWallHeightCm)
+    if (wallHeightValueEl) wallHeightValueEl.textContent = String(nextWallHeightCm)
   }
+  const nextWallHeightUnits = nextWallHeightCm / CM_PER_UNIT
   const w = nextCols * 2 + 1
   const h = nextRows * 2 + 1
   const width = (w - 1) * spaceBetweenWalls
   const depth = (h - 1) * spaceBetweenWalls
-  const size = [width, nextWallHeight, depth]
+  const size = [width, nextWallHeightUnits, depth]
   preview.geometry.dispose()
   preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
   preview.userData.size = [...size]
   preview.userData.mazeCols = nextCols
   preview.userData.mazeRows = nextRows
   refreshOutline(preview)
-  preview.position.set(baseOffset[0], baseOffset[1] + nextWallHeight / 2, baseOffset[2])
+  preview.position.set(baseOffset[0], baseOffset[1] + nextWallHeightUnits / 2, baseOffset[2])
 }
 
 function addArenaFloor(cols, rows, tileSize, offset = [0, 0, 0], rotation = null) {
