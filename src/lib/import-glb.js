@@ -9,6 +9,7 @@ export function createImportSystem({
   scene,
   getUseLitMaterials,
   addImportedLight,
+  showToast,
 }) {
   function collectMeshes(root) {
     const meshes = []
@@ -61,13 +62,38 @@ export function createImportSystem({
       const first = files[0]
       const ext = first.name.split('.').pop()?.toLowerCase()
       if (ext === 'glb' || ext === 'gltf') {
-        const sceneRoot = await loadGlbSceneFromFile(first)
-        if (!sceneRoot) return
-        const meshes = collectMeshes(sceneRoot)
-        const lights = collectLights(sceneRoot)
-        addImportedMeshes(meshes)
-        if (addImportedLight) {
-          lights.forEach((light) => addImportedLight(light))
+        try {
+          const sceneRoot = await loadGlbSceneFromFile(first)
+          if (!sceneRoot) {
+            if (showToast) {
+              showToast(
+                'The file could not be loaded. It may be corrupted or in an unsupported format.',
+                {
+                  type: 'error',
+                  recoveryLabel: 'Try again',
+                  onRecovery: loadLevelFromFile,
+                }
+              )
+            }
+            return
+          }
+          const meshes = collectMeshes(sceneRoot)
+          const lights = collectLights(sceneRoot)
+          addImportedMeshes(meshes)
+          if (addImportedLight) {
+            lights.forEach((light) => addImportedLight(light))
+          }
+        } catch (err) {
+          if (showToast) {
+            showToast(
+              'The file could not be loaded. Try a different file or check that it is a valid GLB/GLTF.',
+              {
+                type: 'error',
+                recoveryLabel: 'Try again',
+                onRecovery: loadLevelFromFile,
+              }
+            )
+          }
         }
       }
     })

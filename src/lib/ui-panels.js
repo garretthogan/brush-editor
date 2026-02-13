@@ -12,12 +12,20 @@ export function initUIPanels({ brushes, lights, baseLightEntries, selectBrush, s
   _selectBrush = selectBrush
   _selectLight = selectLight
   _focusCameraOnObject = focusCameraOnObject
+
+  const searchInput = document.getElementById('scene-list-search')
+  if (searchInput) {
+    searchInput.addEventListener('input', () => updateSceneList())
+  }
 }
 
 export function updateSceneList() {
   const container = document.getElementById('scene-list')
   if (!container || !_brushes || !_lights) return
   container.innerHTML = ''
+
+  const searchQuery = (document.getElementById('scene-list-search')?.value ?? '').trim().toLowerCase()
+  const matches = (text) => !searchQuery || String(text ?? '').toLowerCase().includes(searchQuery)
 
   const makeLabel = (text) => {
     const el = document.createElement('div')
@@ -61,15 +69,21 @@ export function updateSceneList() {
   }
 
   Array.from(groups.keys()).sort().forEach((groupId) => {
+    const items = groups.get(groupId)
+    const filtered = items.filter(({ label }) => matches(label))
+    const showGroup = matches(groupId) || filtered.length > 0
+    if (!showGroup) return
+    const itemsToShow = matches(groupId) ? items : filtered
+    if (itemsToShow.length === 0) return
     const details = document.createElement('details')
     details.className = 'scene-list-group'
-    details.open = false
+    details.open = searchQuery.length > 0
     const summary = document.createElement('summary')
     summary.textContent = groupId
     details.appendChild(summary)
     const sublist = document.createElement('div')
     sublist.className = 'scene-list-subitems'
-    groups.get(groupId).forEach(({ mesh, label }) => {
+    itemsToShow.forEach(({ mesh, label }) => {
       sublist.appendChild(makeButton(label, () => {
         if (_selectLight) _selectLight(null)
         _selectBrush?.(mesh)
@@ -80,7 +94,7 @@ export function updateSceneList() {
     objectList.appendChild(details)
   })
 
-  loose.forEach(({ mesh, label }) => {
+  loose.filter(({ label }) => matches(label)).forEach(({ mesh, label }) => {
     objectList.appendChild(makeButton(label, () => {
       if (_selectLight) _selectLight(null)
       _selectBrush?.(mesh)
@@ -98,10 +112,11 @@ export function updateSceneList() {
       label: `${entry.type}_light_${String(idx + 1).padStart(2, '0')}`,
     })),
   ].filter((entry) => entry?.light?.parent)
-  if (allLights.length > 0) {
+  const filteredLights = allLights.filter((entry) => matches(entry.label))
+  if (filteredLights.length > 0) {
     lightList.appendChild(makeLabel('Lights'))
   }
-  allLights.forEach((entry) => {
+  filteredLights.forEach((entry) => {
     lightList.appendChild(makeButton(entry.label, () => {
       if (_selectBrush) _selectBrush(null)
       _selectLight?.(entry)

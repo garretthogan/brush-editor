@@ -163,6 +163,10 @@ export function createInputHandler(ctx) {
       suppressSelectOnce = false
       return
     }
+    if (ctx.shouldSuppressSelect?.()) {
+      ctx.onRampCreatorPick?.(e)
+      return
+    }
     const lightEntry = ctx.pickLight ? ctx.pickLight(e) : null
     const brush = ctx.pickBrush(e)
     if (lightEntry && ctx.selectLight) {

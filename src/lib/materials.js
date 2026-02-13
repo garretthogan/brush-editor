@@ -89,23 +89,21 @@ export function loadTextureForSpawn() {
 }
 
 export function createBrushMaterial(texture, depthBias, lit, color = null) {
+  const baseOpts = {
+    map: texture,
+    polygonOffset: false,
+    polygonOffsetFactor: 0,
+    polygonOffsetUnits: 0,
+  }
   if (lit) {
     const material = new THREE.MeshStandardMaterial({
-      map: texture,
+      ...baseOpts,
       flatShading: false,
-      polygonOffset: true,
-      polygonOffsetFactor: 2,
-      polygonOffsetUnits: depthBias,
     })
     if (color && material.color) material.color.copy(color)
     return material
   }
-  const material = new THREE.MeshBasicMaterial({
-    map: texture,
-    polygonOffset: true,
-    polygonOffsetFactor: 2,
-    polygonOffsetUnits: depthBias,
-  })
+  const material = new THREE.MeshBasicMaterial(baseOpts)
   if (color && material.color) material.color.copy(color)
   return material
 }
@@ -152,6 +150,11 @@ export function updateBrushMaterials(lit) {
     })
     materials.forEach((mat) => mat?.dispose?.())
     mesh.material = Array.isArray(mesh.material) ? nextMaterials : nextMaterials[0]
+    if (mesh.userData?.type === 'ramp') {
+      const mat = mesh.material
+      if (Array.isArray(mat)) mat.forEach((m) => (m.side = THREE.DoubleSide))
+      else if (mat) mat.side = THREE.DoubleSide
+    }
   })
 }
 

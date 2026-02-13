@@ -4,4 +4,7 @@ import { defineConfig } from 'vite'
 // (e.g. https://username.github.io/brush-editor/ or a custom domain)
 export default defineConfig({
   base: './',
+  server: {
+    host: true, // Expose on local network (e.g. http://192.168.x.x:5173)
+  },
 })

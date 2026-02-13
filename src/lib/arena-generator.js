@@ -451,6 +451,10 @@ function fitnessScore(metrics) {
   return connectivity + collision + fairness + overall
 }
 
+function cloneGrid(grid) {
+  return grid.map((col) => [...col])
+}
+
 /**
  * Generate an arena grid with SBPCG-inspired scoring.
  * @param {object} options
@@ -464,7 +468,7 @@ function fitnessScore(metrics) {
  * @param {number} [options.corridorWidth=1]
  * @param {number} [options.exitWidth=2]
  * @param {number} [options.candidates=8]
- * @returns {{ grid:number[][], spawns:Array, flags:Array, collisionPoints:Array, covers:Array }}
+ * @returns {{ grids:number[][][], spawns:Array, flags:Array, collisionPoints:Array, covers:Array }}
  */
 export function generateArena(options = {}) {
   const {
@@ -503,11 +507,16 @@ export function generateArena(options = {}) {
     }
   }
 
+  const allSpawns = best.spawns.map((s) => ({ ...s, floor: 0 }))
+  const allFlags = best.flags.map((f) => ({ ...f, floor: 0 }))
+  const allCollisionPoints = best.collisionPoints.map((p) => ({ ...p, floor: 0 }))
+  const allCovers = best.covers.map((c) => ({ ...c, floor: 0 }))
+
   return {
-    grid: best.grid,
-    spawns: best.spawns,
-    flags: best.flags,
-    collisionPoints: best.collisionPoints,
-    covers: best.covers,
+    grids: [best.grid],
+    spawns: allSpawns,
+    flags: allFlags,
+    collisionPoints: allCollisionPoints,
+    covers: allCovers,
   }
 }

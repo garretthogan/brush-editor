@@ -17,6 +17,9 @@
  * @param {number} options.exitWidth - Width of exit in cells (1–9)
  * @param {number} options.centerRoomSize - Center room size (1–6)
  * @param {string} options.layout - 'center-out' | 'out-out'
+ * @param {number} [options.roomCount=0] - Number of random rooms to carve (0 = no rooms)
+ * @param {number} [options.roomMinSize=2] - Min room size in cells (each dimension)
+ * @param {number} [options.roomMaxSize=4] - Max room size in cells (each dimension)
  * @returns {{ grid: number[][], cols: number, rows: number }}
  */
 export function generateMaze(options = {}) {
@@ -26,6 +29,9 @@ export function generateMaze(options = {}) {
     exitWidth = 1,
     centerRoomSize = 1,
     layout = 'center-out',
+    roomCount = 0,
+    roomMinSize = 2,
+    roomMaxSize = 4,
   } = options
 
   const centerStart = layout === 'center-out'
@@ -142,6 +148,39 @@ export function generateMaze(options = {}) {
           grid[pair.b][ez] = 0
         }
       }
+    }
+  }
+
+  if (roomCount > 0) {
+    const minRw = Math.max(2, Math.min(roomMinSize, roomMaxSize))
+    const maxRw = Math.max(minRw, roomMaxSize)
+    const placed = []
+    let attempts = 0
+    const maxAttempts = roomCount * 50
+    while (placed.length < roomCount && attempts < maxAttempts) {
+      attempts += 1
+      const rw = Math.floor(Math.random() * (maxRw - minRw + 1)) + minRw
+      const rh = Math.floor(Math.random() * (maxRw - minRw + 1)) + minRw
+      const maxCx = Math.max(1, cols - rw)
+      const maxCz = Math.max(1, rows - rh)
+      if (maxCx < 1 || maxCz < 1) break
+      const cxRoom = Math.floor(Math.random() * (maxCx - 1 + 1)) + 1
+      const czRoom = Math.floor(Math.random() * (maxCz - 1 + 1)) + 1
+      const gx0 = cxRoom * 2 + 1
+      const gz0 = czRoom * 2 + 1
+      const gx1 = gx0 + rw * 2 - 1
+      const gz1 = gz0 + rh * 2 - 1
+      if (gx1 >= w - 1 || gz1 >= h - 1) continue
+      const overlaps = placed.some(
+        (p) => gx0 <= p.gx1 && gx1 >= p.gx0 && gz0 <= p.gz1 && gz1 >= p.gz0
+      )
+      if (overlaps) continue
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gz = gz0; gz <= gz1; gz++) {
+          grid[gx][gz] = 0
+        }
+      }
+      placed.push({ gx0, gz0, gx1, gz1 })
     }
   }
 

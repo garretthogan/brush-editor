@@ -163,7 +163,7 @@ body {
   top: 48px;
   left: 12px;
   z-index: 10;
-  max-width: min(340px, calc(100vw - 2rem));
+  max-width: min(420px, calc(100vw - 2rem));
   padding: 0.5rem 0.75rem;
   background: rgba(22, 22, 22, 0.95);
   border: 1px solid #2a2a2a;
@@ -180,7 +180,7 @@ body {
   bottom: auto;
   right: 12px;
   z-index: 10;
-  width: 280px;
+  width: 340px;
   box-sizing: border-box;
   padding: 0.5rem 0.75rem;
   background: rgba(22, 22, 22, 0.95);
@@ -197,8 +197,8 @@ body {
 }
 
 #camera-controls .control-row input[type="range"] {
-  flex: 1 1 120px;
-  max-width: 160px;
+  flex: 1 1 140px;
+  max-width: 200px;
 }
 
 #camera-controls .control-row span {
@@ -278,6 +278,30 @@ body {
   align-items: stretch;
 }
 
+.ramp-creator-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid #2a2a2a;
+  margin-top: 0.5rem;
+}
+
+.ramp-creator-panel.hidden {
+  display: none;
+}
+
+.ramp-creator-status {
+  font-size: 0.85rem;
+  color: #a0a0a0;
+}
+
+.add-brushes button.active {
+  background: #353535;
+  border-color: #4a9eff;
+  color: #e0e0e0;
+}
+
 .add-brushes,
 .brush-actions,
 .add-lights {
@@ -306,6 +330,25 @@ body {
   color: #9a9a9a;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.scene-list-search {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8rem;
+  background: #232323;
+  border: 1px solid #2f2f2f;
+  border-radius: 4px;
+  color: #e0e0e0;
+}
+
+.scene-list-search::placeholder {
+  color: #6a6a6a;
+}
+
+.scene-list-search:focus {
+  outline: none;
+  border-color: #4a9eff;
 }
 
 .scene-list-content {
@@ -376,7 +419,7 @@ body {
 .modal-content {
   position: relative;
   z-index: 1;
-  width: min(520px, calc(100vw - 2rem));
+  width: min(600px, calc(100vw - 2rem));
   max-height: min(80vh, 640px);
   background: #1a1a1a;
   border: 1px solid #2a2a2a;
@@ -509,13 +552,13 @@ body {
 }
 
 .control-row label {
-  min-width: 120px;
+  min-width: 140px;
   font-size: 0.85rem;
 }
 
 .control-row input[type="range"] {
   flex: 1;
-  max-width: 160px;
+  max-width: 200px;
 }
 
 .control-row input[type="color"] {
@@ -596,10 +639,8 @@ body {
   cursor: pointer;
 }
 
-.control-row select:hover,
-.control-row select:focus {
+.control-row select:hover {
   border-color: #4a9eff;
-  outline: none;
 }
 
 .control-row span {
@@ -661,4 +702,120 @@ body {
 
 #pick-debug.hidden {
   display: none;
+}
+
+/* --- Focus visibility (hce/focus-visible) --- */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 2px solid #4a9eff;
+  outline-offset: 2px;
+}
+
+.control-row select:focus-visible {
+  border-color: #4a9eff;
+  outline: 2px solid #4a9eff;
+  outline-offset: 0;
+}
+
+/* --- Toast (hce/require-recovery-path, user-errors-actionable) --- */
+#toast-container {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: min(90vw, 420px);
+  pointer-events: none;
+}
+
+#toast-container * {
+  pointer-events: auto;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  font-size: 0.9rem;
+  font-family: inherit;
+  background: #1a1a1a;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  animation: toast-in 0.2s ease-out;
+}
+
+.toast-exit {
+  animation: toast-out 0.2s ease-in forwards;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-0.5rem);
+  }
+}
+
+.toast-message {
+  flex: 1;
+  color: #e0e0e0;
+}
+
+.toast-success {
+  border-color: #2a6a2a;
+}
+
+.toast-error {
+  border-color: #8a2a2a;
+  background: #1a0a0a;
+}
+
+.toast-error .toast-message {
+  color: #f0a0a0;
+}
+
+.toast-undo {
+  border-color: #4a6a8a;
+}
+
+.toast-recovery {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  font-family: inherit;
+  background: #2a5a8a;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toast-recovery:hover {
+  background: #3a6a9a;
+}
+
+.toast-recovery:focus-visible {
+  outline: 2px solid #4a9eff;
+  outline-offset: 2px;
 }

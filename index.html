@@ -16,8 +16,8 @@
           <button id="tab-skybox" class="tab">Preview</button>
         </div>
         <div id="file-buttons">
-          <button id="btn-save" title="Save Level">Save</button>
-          <button id="btn-load" title="Load Level / Import GLB">Load</button>
+          <button id="btn-save" title="Save Level" aria-label="Save level (export GLB)">Save</button>
+          <button id="btn-load" title="Load Level / Import GLB" aria-label="Load level from GLB or GLTF file">Load</button>
         </div>
       </div>
       <div id="viewport">
@@ -36,8 +36,25 @@
                 <select id="texture-select"></select>
               </div>
               <div class="add-brushes">
-                <button id="btn-add-box" title="Add Box Brush">Add Box</button>
-                <button id="btn-add-cylinder" title="Add Cylinder Brush">Add Cylinder</button>
+                <button id="btn-add-floor" title="Add Floor (10×10 m)" aria-label="Add floor brush to scene">Add Floor</button>
+                <button id="btn-add-wall" title="Add Wall (10×4 m)" aria-label="Add wall brush to scene">Add Wall</button>
+                <button id="btn-add-cylinder" title="Add Cylinder Brush" aria-label="Add cylinder brush to scene">Add Cylinder</button>
+                <button id="btn-add-ramp" title="Add Ramp (select four points: two per end)" aria-label="Add ramp by selecting four corner points (two per end)">Add Ramp</button>
+              </div>
+              <div id="ramp-creator-panel" class="ramp-creator-panel hidden">
+                <div class="ramp-creator-status" id="ramp-creator-status">Click four points: two for low end, two for high end</div>
+                <div class="control-row">
+                  <label for="ramp-snap-size">Grid snap (cm)</label>
+                  <input type="number" id="ramp-snap-size" min="0" max="500" step="1" value="10" aria-describedby="ramp-snap-size-hint" />
+                  <span id="ramp-snap-size-hint" class="hint">0 = off</span>
+                </div>
+                <div class="control-row">
+                  <label for="ramp-scale">Scale (%)</label>
+                  <input type="range" id="ramp-scale" min="50" max="200" step="5" value="100" aria-describedby="ramp-scale-value" />
+                  <span id="ramp-scale-value">100</span>
+                </div>
+                <button id="btn-ramp-place" disabled title="Place ramp (requires four points)" aria-label="Place ramp when all four points are selected">Place Ramp</button>
+                <button id="btn-ramp-cancel" title="Cancel ramp creation" aria-label="Cancel ramp creation">Cancel</button>
               </div>
               <div class="control-row">
                 <label for="outline-width">Outline thickness</label>
@@ -46,14 +63,15 @@
               </div>
               <div class="tool-divider" role="separator"></div>
               <div class="brush-actions">
-                <button id="btn-move" title="Move Brush">Move</button>
-                <button id="btn-rotate" title="Rotate Brush">Rotate</button>
-                <button id="btn-scale" title="Scale Brush">Scale</button>
-                <button id="btn-delete" title="Delete Selected">Delete</button>
+                <button id="btn-move" title="Move Brush" aria-label="Move selected object">Move</button>
+                <button id="btn-rotate" title="Rotate Brush" aria-label="Rotate selected object">Rotate</button>
+                <button id="btn-scale" title="Scale Brush" aria-label="Scale selected object">Scale</button>
+                <button id="btn-delete" title="Delete Selected" aria-label="Delete selected object (Undo to restore)">Delete</button>
               </div>
               <div class="tool-divider" role="separator"></div>
               <div class="scene-list">
                 <div class="scene-list-title">Scene Objects</div>
+                <input type="search" id="scene-list-search" placeholder="Search objects..." class="scene-list-search" aria-label="Search scene objects" />
                 <div id="scene-list" class="scene-list-content"></div>
               </div>
             </div>
@@ -88,34 +106,60 @@
               </div>
               <div class="control-row">
                 <label for="maze-space">Space between walls (cm)</label>
-                <input type="range" id="maze-space" min="50" max="800" step="10" value="200" />
+                <input type="range" id="maze-space" min="20" max="2000" step="10" value="200" />
                 <span id="maze-space-value">200</span>
               </div>
               <div class="control-row">
                 <label for="maze-thickness">Wall thickness (cm)</label>
-                <input type="range" id="maze-thickness" min="5" max="200" step="5" value="15" />
+                <input type="range" id="maze-thickness" min="2" max="500" step="5" value="15" />
                 <span id="maze-thickness-value">15</span>
               </div>
               <div class="control-row">
                 <label for="maze-height">Wall height (cm)</label>
-                <input type="range" id="maze-height" min="50" max="1200" step="10" value="200" />
+                <input type="range" id="maze-height" min="20" max="2000" step="10" value="200" />
                 <span id="maze-height-value">200</span>
-              </div>
-              <div class="control-row">
-                <label for="maze-exit-width">Exit width (cells)</label>
-                <input type="range" id="maze-exit-width" min="1" max="9" step="1" value="1" />
-                <span id="maze-exit-width-value">1</span>
-              </div>
-              <div class="control-row" id="center-room-row">
-                <label for="maze-center-size">Center room size</label>
-                <input type="range" id="maze-center-size" min="1" max="6" step="1" value="2" />
-                <span id="maze-center-size-value">2</span>
               </div>
               <div class="control-row">
                 <label>
                   <input type="checkbox" id="maze-start-from-center" checked />
                   Start from center
                 </label>
+              </div>
+              <div class="panel collapsible collapsed">
+                <button type="button" class="panel-header" data-panel="maze-floor" aria-expanded="false" aria-controls="panel-maze-floor">
+                  <span class="panel-chevron">▼</span>
+                  Floor options
+                </button>
+                <div class="panel-content" id="panel-maze-floor">
+                  <div class="control-row">
+                    <label for="maze-flat-floor-size">Flat floor size (cm)</label>
+                    <input type="range" id="maze-flat-floor-size" min="1" max="100" step="1" value="20" aria-describedby="maze-flat-floor-size-value" />
+                    <span id="maze-flat-floor-size-value">20</span>
+                  </div>
+                </div>
+              </div>
+              <div class="panel collapsible collapsed">
+                <button type="button" class="panel-header" data-panel="maze-advanced" aria-expanded="false" aria-controls="panel-maze-advanced">
+                  <span class="panel-chevron">▼</span>
+                  Advanced maze options
+                </button>
+                <div class="panel-content" id="panel-maze-advanced">
+                  <div class="control-row">
+                    <label for="maze-exit-width">Exit width (cells)</label>
+                    <input type="range" id="maze-exit-width" min="1" max="9" step="1" value="1" aria-describedby="maze-exit-width-value" />
+                    <span id="maze-exit-width-value">1</span>
+                  </div>
+                  <div class="control-row">
+                    <label for="maze-room-count">Rooms</label>
+                    <input type="range" id="maze-room-count" min="0" max="12" step="1" value="0" aria-describedby="maze-room-count-value" />
+                    <span id="maze-room-count-value">0</span>
+                  </div>
+                  <div class="control-row" id="center-room-row">
+                    <label for="maze-center-size">Center room size</label>
+                    <input type="range" id="maze-center-size" min="1" max="6" step="1" value="2" aria-describedby="maze-center-size-value" />
+                    <span id="maze-center-size-value">2</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -149,17 +193,17 @@
               </div>
               <div class="control-row">
                 <label for="arena-tile">Tile size (cm)</label>
-                <input type="range" id="arena-tile" min="50" max="600" step="10" value="250" />
+                <input type="range" id="arena-tile" min="20" max="2000" step="10" value="250" />
                 <span id="arena-tile-value">250</span>
               </div>
               <div class="control-row">
                 <label for="arena-height">Wall height (cm)</label>
-                <input type="range" id="arena-height" min="100" max="1200" step="10" value="300" />
+                <input type="range" id="arena-height" min="20" max="2000" step="10" value="300" />
                 <span id="arena-height-value">300</span>
               </div>
               <div class="control-row">
                 <label for="arena-obstacle-height">Obstacle height (cm)</label>
-                <input type="range" id="arena-obstacle-height" min="50" max="1200" step="10" value="200" />
+                <input type="range" id="arena-obstacle-height" min="20" max="2000" step="10" value="200" />
                 <span id="arena-obstacle-height-value">200</span>
               </div>
               <div class="control-row">
@@ -167,30 +211,38 @@
                 <input type="range" id="arena-density" min="0" max="0.6" step="0.05" value="0.28" />
                 <span id="arena-density-value">0.28</span>
               </div>
-              <div class="control-row">
-                <label for="arena-buildings">Building count</label>
-                <input type="range" id="arena-buildings" min="0" max="20" step="1" value="8" />
-                <span id="arena-buildings-value">8</span>
-              </div>
-              <div class="control-row">
-                <label for="arena-smoothing">Smoothing passes</label>
-                <input type="range" id="arena-smoothing" min="0" max="4" step="1" value="2" />
-                <span id="arena-smoothing-value">2</span>
-              </div>
-              <div class="control-row">
-                <label for="arena-corridor">Corridor width</label>
-                <input type="range" id="arena-corridor" min="1" max="3" step="1" value="1" />
-                <span id="arena-corridor-value">1</span>
-              </div>
-              <div class="control-row">
-                <label for="arena-exit-width">Exit width</label>
-                <input type="range" id="arena-exit-width" min="1" max="6" step="1" value="2" />
-                <span id="arena-exit-width-value">2</span>
-              </div>
-              <div class="control-row">
-                <label for="arena-candidates">Candidate maps</label>
-                <input type="range" id="arena-candidates" min="1" max="12" step="1" value="8" />
-                <span id="arena-candidates-value">8</span>
+              <div class="panel collapsible collapsed">
+                <button type="button" class="panel-header" data-panel="arena-advanced" aria-expanded="false" aria-controls="panel-arena-advanced">
+                  <span class="panel-chevron">▼</span>
+                  Advanced arena options
+                </button>
+                <div class="panel-content" id="panel-arena-advanced">
+                  <div class="control-row">
+                    <label for="arena-buildings">Building count</label>
+                    <input type="range" id="arena-buildings" min="0" max="20" step="1" value="8" />
+                    <span id="arena-buildings-value">8</span>
+                  </div>
+                  <div class="control-row">
+                    <label for="arena-smoothing">Smoothing passes</label>
+                    <input type="range" id="arena-smoothing" min="0" max="4" step="1" value="2" />
+                    <span id="arena-smoothing-value">2</span>
+                  </div>
+                  <div class="control-row">
+                    <label for="arena-corridor">Corridor width</label>
+                    <input type="range" id="arena-corridor" min="1" max="3" step="1" value="1" />
+                    <span id="arena-corridor-value">1</span>
+                  </div>
+                  <div class="control-row">
+                    <label for="arena-exit-width">Exit width</label>
+                    <input type="range" id="arena-exit-width" min="1" max="6" step="1" value="2" />
+                    <span id="arena-exit-width-value">2</span>
+                  </div>
+                  <div class="control-row">
+                    <label for="arena-candidates">Candidate maps</label>
+                    <input type="range" id="arena-candidates" min="1" max="12" step="1" value="8" />
+                    <span id="arena-candidates-value">8</span>
+                  </div>
+                </div>
               </div>
               <div class="control-row credit-row">
                 <a

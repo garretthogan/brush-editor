@@ -1,3 +1,4 @@
+import './lib/polyfills.js'
 import './style.css'
 import * as THREE from 'three'
 import { initScene } from './lib/scene-setup.js'
@@ -9,6 +10,7 @@ import { initUIPanels, updateSceneList } from './lib/ui-panels.js'
 import { initExportSystem, openExportModal } from './lib/export-glb.js'
 import { createImportSystem } from './lib/import-glb.js'
 import { setState } from './lib/state.js'
+import { showToast } from './lib/toast.js'
 import {
   TEXTURE_POOL,
   TEXTURE_INDEX,
@@ -140,7 +142,7 @@ let selectedBrush = null
 let currentTool = 'select'
 let arenaPreview = null
 let mazePreview = null
-let lastArenaWallHeight = 3
+let lastArenaWallHeightCm = 300
 let lastMazeState = null
 let lastArenaState = null
 let lastMazePlacement = null
@@ -241,6 +243,10 @@ function pushUndoState() {
 }
 
 function undo() {
+  if (rampCreatorState.active && rampUndoStack.length > 0) {
+    undoRampPoint()
+    return
+  }
   if (undoStack.length === 0) return
   const state = JSON.parse(undoStack.pop())
   deserializeLevel(state)
@@ -333,13 +339,31 @@ function createCylinderMesh(radius = 1, height = 2, position = [0, 1, 0], depthB
   return mesh
 }
 
-function addBoxBrush() {
+function addFloorBrush() {
   pushUndoState()
-  const size = [2, 2, 2]
-  const position = [0, 1, 0]
+  const size = [10, 0.2, 10]
+  const position = [0, 0.1, 0]
   const mesh = createBrushMesh(size, position, brushes.length * 4)
   mesh.userData.id = crypto.randomUUID()
   mesh.userData.isUserBrush = true
+  mesh.userData.subtype = 'floor'
+  scene.add(mesh)
+  brushes.push(mesh)
+  selectBrush(mesh)
+  setCurrentTool('translate')
+  setTransformMode('translate')
+  focusCameraOnObject(mesh)
+  updateSceneList()
+}
+
+function addWallBrush() {
+  pushUndoState()
+  const size = [10, 4, 0.2]
+  const position = [0, 2, 0]
+  const mesh = createBrushMesh(size, position, brushes.length * 4)
+  mesh.userData.id = crypto.randomUUID()
+  mesh.userData.isUserBrush = true
+  mesh.userData.subtype = 'wall'
   scene.add(mesh)
   brushes.push(mesh)
   selectBrush(mesh)
@@ -364,6 +388,369 @@ function addCylinderBrush() {
   setTransformMode('translate')
   focusCameraOnObject(mesh)
   updateSceneList()
+}
+
+// --- Ramp creator tool (four-point selection: two per end) ---
+const rampCreatorState = { active: false, pointA: null, pointB: null, pointC: null, pointD: null }
+const rampUndoStack = []
+const rampPointMarkers = []
+let rampPreviewMesh = null
+let rampCursorPreview = null
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+const groundIntersect = new THREE.Vector3()
+
+const RAMP_MARKER_COLORS = { A: 0x00ff00, B: 0x00cc00, C: 0xff8800, D: 0xff6600 }
+function addRampPointMarker(point, label) {
+  const geometry = new THREE.SphereGeometry(0.15, 16, 12)
+  const material = new THREE.MeshBasicMaterial({
+    color: RAMP_MARKER_COLORS[label] ?? 0xffffff,
+    transparent: true,
+    opacity: 0.9,
+  })
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.position.set(point[0], point[1], point[2])
+  mesh.userData.rampMarker = true
+  mesh.userData.markerLabel = label
+  scene.add(mesh)
+  rampPointMarkers.push(mesh)
+  return mesh
+}
+
+function clearRampPointMarkers() {
+  rampPointMarkers.forEach((m) => {
+    scene.remove(m)
+    m.geometry.dispose()
+    m.material.dispose()
+  })
+  rampPointMarkers.length = 0
+}
+
+function computeRampParams(pointA, pointB, rampWidth, scale = 1) {
+  const a = new THREE.Vector3(pointA[0], pointA[1], pointA[2])
+  const b = new THREE.Vector3(pointB[0], pointB[1], pointB[2])
+  const dy = b.y - a.y
+  const lowEnd = dy >= 0 ? a : b
+  const highEnd = dy >= 0 ? b : a
+  const dir = new THREE.Vector3().subVectors(highEnd, lowEnd)
+  const rampRun = Math.max(0.01, Math.sqrt(dir.x * dir.x + dir.z * dir.z))
+  const rampRise = Math.max(0.01, dir.y)
+  const slopeAngleDeg = THREE.MathUtils.radToDeg(Math.atan2(rampRise, rampRun))
+
+  const s = Math.max(0.5, Math.min(2, scale))
+
+  return {
+    rampWidth: rampWidth * s,
+    rampRun: rampRun * s,
+    effectiveRise: rampRise * s,
+    posX: lowEnd.x,
+    posY: lowEnd.y,
+    posZ: lowEnd.z,
+    rotY: Math.atan2(dir.x, dir.z),
+    slopeAngleDeg,
+  }
+}
+
+function computeRampParamsFrom4Points(pointA, pointB, pointC, pointD, scale = 1) {
+  const a = new THREE.Vector3(pointA[0], pointA[1], pointA[2])
+  const b = new THREE.Vector3(pointB[0], pointB[1], pointB[2])
+  const c = new THREE.Vector3(pointC[0], pointC[1], pointC[2])
+  const d = new THREE.Vector3(pointD[0], pointD[1], pointD[2])
+
+  const lowCenter = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5)
+  const highCenter = new THREE.Vector3().addVectors(c, d).multiplyScalar(0.5)
+
+  const rampDir = new THREE.Vector3().subVectors(highCenter, lowCenter)
+  const rampRun = Math.max(0.01, Math.sqrt(rampDir.x * rampDir.x + rampDir.z * rampDir.z))
+  const rampRise = Math.max(0.01, rampDir.y)
+  const slopeAngleDeg = THREE.MathUtils.radToDeg(Math.atan2(rampRise, rampRun))
+
+  const lowEdgeLen = a.distanceTo(b)
+  const highEdgeLen = c.distanceTo(d)
+  const rampWidth = Math.max(0.01, (lowEdgeLen + highEdgeLen) * 0.5)
+
+  const s = Math.max(0.5, Math.min(2, scale))
+
+  const rotY = Math.atan2(rampDir.x, rampDir.z)
+
+  return {
+    rampWidth: rampWidth * s,
+    rampRun: rampRun * s,
+    effectiveRise: rampRise * s,
+    posX: lowCenter.x,
+    posY: lowCenter.y,
+    posZ: lowCenter.z,
+    rotY,
+    slopeAngleDeg,
+  }
+}
+
+function updateRampPreview() {
+  if (rampPreviewMesh) {
+    scene.remove(rampPreviewMesh)
+    rampPreviewMesh.geometry.dispose()
+    rampPreviewMesh.material.dispose()
+    rampPreviewMesh = null
+  }
+  if (!rampCreatorState.pointA || !rampCreatorState.pointB || !rampCreatorState.pointC || !rampCreatorState.pointD) return
+  const rampScale = parseFloat(document.getElementById('ramp-scale')?.value ?? '100') / 100
+  const geometry = createRampGeometryFrom4Points(
+    rampCreatorState.pointA,
+    rampCreatorState.pointB,
+    rampCreatorState.pointC,
+    rampCreatorState.pointD,
+    rampScale
+  )
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x4a9eff,
+    transparent: true,
+    opacity: 0.4,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  })
+  rampPreviewMesh = new THREE.Mesh(geometry, material)
+  rampPreviewMesh.userData.rampPreview = true
+  rampPreviewMesh.renderOrder = -1
+  scene.add(rampPreviewMesh)
+}
+
+function clearRampPreview() {
+  if (rampPreviewMesh) {
+    scene.remove(rampPreviewMesh)
+    rampPreviewMesh.geometry.dispose()
+    rampPreviewMesh.material.dispose()
+    rampPreviewMesh = null
+  }
+}
+
+function getRampSnapSizeCm() {
+  const el = document.getElementById('ramp-snap-size')
+  if (!el) return 0
+  const v = parseFloat(el.value)
+  return Number.isFinite(v) && v >= 0 ? v : 0
+}
+
+function snapPointToGrid(point, gridSizeCm) {
+  if (!gridSizeCm || gridSizeCm <= 0) return point
+  const step = gridSizeCm / CM_PER_UNIT
+  return [
+    Math.round(point[0] / step) * step,
+    Math.round(point[1] / step) * step,
+    Math.round(point[2] / step) * step,
+  ]
+}
+
+function pickPoint3DFromCoords(clientX, clientY) {
+  const rect = pickRectElement.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) return null
+  pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+
+  let pt = null
+  const intersects = raycaster.intersectObjects(brushes, true)
+  for (const hit of intersects) {
+    if (hit.object.userData?.rampMarker) continue
+    const brush = findBrushFromObject(hit.object)
+    if (brush && brush.userData?.type !== 'ramp') {
+      pt = hit.point.toArray()
+      break
+    }
+  }
+
+  if (!pt && raycaster.ray.intersectPlane(groundPlane, groundIntersect)) {
+    pt = groundIntersect.toArray()
+  }
+  if (pt && rampCreatorState.active) {
+    const snapCm = getRampSnapSizeCm()
+    if (snapCm > 0) pt = snapPointToGrid(pt, snapCm)
+  }
+  return pt
+}
+
+function pickPoint3D(event) {
+  return pickPoint3DFromCoords(event.clientX, event.clientY)
+}
+
+function ensureRampCursorPreview() {
+  if (rampCursorPreview) return rampCursorPreview
+  const geometry = new THREE.SphereGeometry(0.12, 12, 8)
+  const material = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.6,
+  })
+  rampCursorPreview = new THREE.Mesh(geometry, material)
+  rampCursorPreview.visible = false
+  rampCursorPreview.userData.rampCursorPreview = true
+  rampCursorPreview.renderOrder = 10
+  rampCursorPreview.material.depthWrite = false
+  scene.add(rampCursorPreview)
+  return rampCursorPreview
+}
+
+function updateRampCursorPreview(clientX, clientY) {
+  if (!rampCreatorState.active) return
+  const preview = ensureRampCursorPreview()
+  const rect = pickRectElement.getBoundingClientRect()
+  if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+    preview.visible = false
+    return
+  }
+  const pt = pickPoint3DFromCoords(clientX, clientY)
+  if (pt) {
+    preview.position.set(pt[0], pt[1], pt[2])
+    preview.visible = true
+  } else {
+    preview.visible = false
+  }
+}
+
+function hideRampCursorPreview() {
+  if (rampCursorPreview) rampCursorPreview.visible = false
+}
+
+function startRampCreator() {
+  setEditorMode('brush')
+  selectBrush(null)
+  rampCreatorState.active = true
+  rampCreatorState.pointA = null
+  rampCreatorState.pointB = null
+  rampCreatorState.pointC = null
+  rampCreatorState.pointD = null
+  document.getElementById('ramp-creator-panel')?.classList.remove('hidden')
+  document.getElementById('panel-brush-tools')?.closest('.panel')?.classList.remove('collapsed')
+  document.getElementById('btn-add-ramp')?.classList.add('active')
+  updateRampCreatorStatus()
+  document.getElementById('btn-ramp-place').disabled = true
+  showToast('Click first point of low end (e.g. left corner).', { type: 'info' })
+}
+
+function undoRampPoint() {
+  if (rampUndoStack.length === 0) return
+  const prev = rampUndoStack.pop()
+  rampCreatorState.pointA = prev.pointA
+  rampCreatorState.pointB = prev.pointB
+  rampCreatorState.pointC = prev.pointC
+  rampCreatorState.pointD = prev.pointD
+  clearRampPointMarkers()
+  if (prev.pointA) addRampPointMarker(prev.pointA, 'A')
+  if (prev.pointB) addRampPointMarker(prev.pointB, 'B')
+  if (prev.pointC) addRampPointMarker(prev.pointC, 'C')
+  if (prev.pointD) addRampPointMarker(prev.pointD, 'D')
+  updateRampPreview()
+  updateRampCreatorStatus()
+  document.getElementById('btn-ramp-place').disabled = !prev.pointA || !prev.pointB || !prev.pointC || !prev.pointD
+  showToast(prev.pointD ? 'Removed point D.' : prev.pointC ? 'Removed point C.' : prev.pointB ? 'Removed point B.' : 'Removed point A.', { type: 'info' })
+}
+
+function cancelRampCreator() {
+  rampCreatorState.active = false
+  rampCreatorState.pointA = null
+  rampCreatorState.pointB = null
+  rampCreatorState.pointC = null
+  rampCreatorState.pointD = null
+  rampUndoStack.length = 0
+  clearRampPointMarkers()
+  clearRampPreview()
+  hideRampCursorPreview()
+  document.getElementById('ramp-creator-panel')?.classList.add('hidden')
+  document.getElementById('btn-add-ramp')?.classList.remove('active')
+}
+
+function updateRampCreatorStatus() {
+  const status = document.getElementById('ramp-creator-status')
+  if (!status) return
+  const { pointA, pointB, pointC, pointD } = rampCreatorState
+  if (!pointA) {
+    status.textContent = '1/4: Click first point of low end'
+  } else if (!pointB) {
+    status.textContent = '2/4: Click second point of low end'
+  } else if (!pointC) {
+    status.textContent = '3/4: Click first point of high end'
+  } else if (!pointD) {
+    status.textContent = '4/4: Click second point of high end'
+  } else {
+    const rampScale = parseFloat(document.getElementById('ramp-scale')?.value ?? '100') / 100
+    const a = new THREE.Vector3(pointA[0], pointA[1], pointA[2])
+    const b = new THREE.Vector3(pointB[0], pointB[1], pointB[2])
+    const c = new THREE.Vector3(pointC[0], pointC[1], pointC[2])
+    const d = new THREE.Vector3(pointD[0], pointD[1], pointD[2])
+    const lowCenter = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5)
+    const highCenter = new THREE.Vector3().addVectors(c, d).multiplyScalar(0.5)
+    const rampDir = new THREE.Vector3().subVectors(highCenter, lowCenter)
+    const rampRun = Math.sqrt(rampDir.x * rampDir.x + rampDir.z * rampDir.z)
+    const rampRise = rampDir.y
+    const slopeAngleDeg = THREE.MathUtils.radToDeg(Math.atan2(rampRise, rampRun))
+    const runM = (rampRun * CM_PER_UNIT / 100).toFixed(1)
+    const riseM = (rampRise * CM_PER_UNIT / 100).toFixed(1)
+    const lowW = a.distanceTo(b) * CM_PER_UNIT / 100
+    const highW = c.distanceTo(d) * CM_PER_UNIT / 100
+    status.textContent = `Preview: ${lowW.toFixed(1)}–${highW.toFixed(1)}m × ${runM}m run × ${riseM}m rise, ${slopeAngleDeg.toFixed(1)}° slope. Place Ramp.`
+  }
+}
+
+function handleRampCreatorPick(event) {
+  if (event.button !== 0) return
+  if (viewport && !viewport.contains(event.target)) return
+  const pt = pickPoint3D(event)
+  if (!pt) {
+    showToast('Click on the floor, a wall, or the ground to place a point.', { type: 'info' })
+    return
+  }
+  const { pointA, pointB, pointC, pointD } = rampCreatorState
+  if (!pointA) {
+    rampUndoStack.push({ pointA: null, pointB: null, pointC: null, pointD: null })
+    rampCreatorState.pointA = pt
+    addRampPointMarker(pt, 'A')
+    showToast('Low end point 1 (green). Click second point of low end.', { type: 'success' })
+  } else if (!pointB) {
+    rampUndoStack.push({ pointA: [...pointA], pointB: null, pointC: null, pointD: null })
+    rampCreatorState.pointB = pt
+    addRampPointMarker(pt, 'B')
+    showToast('Low end complete. Click first point of high end (orange). Undo to remove last point.', { type: 'success' })
+  } else if (!pointC) {
+    rampUndoStack.push({ pointA: [...pointA], pointB: [...pointB], pointC: null, pointD: null })
+    rampCreatorState.pointC = pt
+    addRampPointMarker(pt, 'C')
+    showToast('High end point 1. Click second point of high end. Undo to remove last point.', { type: 'success' })
+  } else if (!pointD) {
+    rampUndoStack.push({ pointA: [...pointA], pointB: [...pointB], pointC: [...pointC], pointD: null })
+    rampCreatorState.pointD = pt
+    addRampPointMarker(pt, 'D')
+    updateRampPreview()
+    showToast('All 4 points set. Adjust scale or click Place Ramp. Undo to remove last point.', { type: 'success' })
+  } else {
+    rampCreatorState.pointA = pt
+    rampCreatorState.pointB = null
+    rampCreatorState.pointC = null
+    rampCreatorState.pointD = null
+    clearRampPointMarkers()
+    clearRampPreview()
+    addRampPointMarker(pt, 'A')
+    showToast('Reset. Click first point of low end.', { type: 'info' })
+  }
+  updateRampCreatorStatus()
+  const allFour = rampCreatorState.pointA && rampCreatorState.pointB && rampCreatorState.pointC && rampCreatorState.pointD
+  document.getElementById('btn-ramp-place').disabled = !allFour
+}
+
+function placeRampFromCreator() {
+  const { pointA, pointB, pointC, pointD } = rampCreatorState
+  if (!pointA || !pointB || !pointC || !pointD) return
+  const rampScale = parseFloat(document.getElementById('ramp-scale')?.value ?? '100') / 100
+  pushUndoState()
+  addRampBrushFrom4Points(pointA, pointB, pointC, pointD, rampScale)
+  const mesh = brushes[brushes.length - 1]
+  selectBrush(mesh)
+  setCurrentTool('translate')
+  setTransformMode('translate')
+  focusCameraOnObject(mesh)
+  cancelRampCreator()
+  showToast('Ramp placed.', { type: 'success' })
+}
+
+function isRampCreatorActive() {
+  return rampCreatorState.active
 }
 
 function addBrushMesh(size, position) {
@@ -722,6 +1109,11 @@ function deleteSelectedLight() {
   }
   selectLight(null)
   updateSceneList()
+  showToast('Light removed.', {
+    type: 'undo',
+    recoveryLabel: 'Undo',
+    onRecovery: undo,
+  })
 }
 
 function updateSpotLightHelpers() {
@@ -763,6 +1155,7 @@ function applyLightScaleToDistance(entry) {
 }
 
 function getMazeControls() {
+  const flatFloorSizeCm = parseFloat(document.getElementById('maze-flat-floor-size')?.value ?? '20')
   return {
     cols: parseInt(document.getElementById('maze-cols').value, 10),
     rows: parseInt(document.getElementById('maze-rows').value, 10),
@@ -772,6 +1165,9 @@ function getMazeControls() {
     exitWidth: parseInt(document.getElementById('maze-exit-width').value, 10),
     centerRoomSize: parseInt(document.getElementById('maze-center-size').value, 10),
     layout: document.getElementById('maze-start-from-center').checked ? 'center-out' : 'out-out',
+    roomCount: parseInt(document.getElementById('maze-room-count')?.value ?? '0', 10) || 0,
+    flatFloorSizeCm,
+    flatFloorSize: flatFloorSizeCm / CM_PER_UNIT,
   }
 }
 
@@ -785,6 +1181,7 @@ function getArenaControls() {
     rows: parseInt(document.getElementById('arena-rows').value, 10),
     tileSize: parseFloat(document.getElementById('arena-tile').value) / CM_PER_UNIT,
     wallHeight,
+    wallHeightCm,
     obstacleHeight,
     density: parseFloat(document.getElementById('arena-density').value),
     buildingCount: parseInt(document.getElementById('arena-buildings').value, 10),
@@ -857,9 +1254,8 @@ function addMazeBrushMesh(size, position, rotation) {
   return mesh
 }
 
-function addMazeFloor(width, depth, thickness, offset = [0, 0, 0], rotation = null) {
-  const position = [offset[0], thickness / 2 + offset[1], offset[2]]
-  const mesh = addBrushMesh([width, thickness, depth], position)
+function addMazeFloorCell(size, position, rotation) {
+  const mesh = addBrushMesh(size, position)
   applyMazeFloorTexture(mesh)
   mesh.userData.isUserBrush = false
   mesh.userData.generator = 'maze'
@@ -868,31 +1264,283 @@ function addMazeFloor(width, depth, thickness, offset = [0, 0, 0], rotation = nu
   mesh.name = activeGenerationGroup
     ? `${activeGenerationGroup}_maze-floor_${String(mesh.userData.id ?? '').slice(0, 8) || 'no-id'}`
     : `maze-floor_${String(mesh.userData.id ?? '').slice(0, 8) || 'no-id'}`
+  if (rotation) mesh.rotation.copy(rotation)
   if (activeGenerationCollector) activeGenerationCollector.push(mesh)
   return mesh
 }
 
-function arenaGridToMeshes(grid, tileSize, wallHeight, offset = [0, 0, 0], rotation = null) {
-  const cols = grid.length
-  const rows = grid[0].length
-  const ox = ((cols - 1) / 2) * tileSize
-  const oz = ((rows - 1) / 2) * tileSize
+function createWedgeGeometry(rampWidth, rampRise, rampRun) {
+  const w = rampWidth / 2
+  const r = rampRun / 2
+  const h = rampRise
+
+  const slopeLen = Math.sqrt(rampRun * rampRun + rampRise * rampRise)
+
+  const positions = []
+  const uvs = []
+
+  positions.push(-w, 0, -r, w, 0, -r, w, 0, r, -w, 0, -r, w, 0, r, -w, 0, r)
+  uvs.push(0, 0, rampWidth, 0, rampWidth, rampRun, 0, 0, rampWidth, rampRun, 0, rampRun)
+
+  positions.push(-w, 0, -r, -w, 0, r, -w, h, r)
+  uvs.push(0, 0, rampRun, 0, rampRun, rampRise)
+
+  positions.push(w, 0, -r, w, h, r, w, 0, r)
+  uvs.push(0, 0, rampRun, rampRise, rampRun, 0)
+
+  positions.push(-w, 0, -r, w, 0, -r, w, h, r, -w, 0, -r, w, h, r, -w, h, r)
+  uvs.push(0, 0, rampWidth, 0, rampWidth, slopeLen, 0, 0, rampWidth, slopeLen, 0, slopeLen)
+
+  positions.push(w, 0, r, -w, 0, r, -w, h, r, w, 0, r, -w, h, r, w, h, r)
+  uvs.push(0, 0, rampWidth, 0, rampWidth, rampRise, 0, 0, rampWidth, rampRise, 0, rampRise)
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.computeVertexNormals()
+
+  return geometry
+}
+
+function segmentsIntersectInXZ(ax, az, bx, bz, cx, cz, dx, dz) {
+  const denom = (dx - cx) * (bz - az) - (dz - cz) * (bx - ax)
+  if (Math.abs(denom) < 1e-10) return false
+  const t = ((ax - cx) * (dz - cz) - (az - cz) * (dx - cx)) / denom
+  const u = ((ax - cx) * (bz - az) - (az - cz) * (bx - ax)) / denom
+  return t > 1e-6 && t < 1 - 1e-6 && u > 1e-6 && u < 1 - 1e-6
+}
+
+function createRampGeometryFrom4Points(pointA, pointB, pointC, pointD, scale = 1) {
+  const a = new THREE.Vector3(pointA[0], pointA[1], pointA[2])
+  const b = new THREE.Vector3(pointB[0], pointB[1], pointB[2])
+  const c = new THREE.Vector3(pointC[0], pointC[1], pointC[2])
+  const d = new THREE.Vector3(pointD[0], pointD[1], pointD[2])
+
+  const centroid = new THREE.Vector3().addVectors(a, b).add(c).add(d).divideScalar(4)
+  const s = Math.max(0.5, Math.min(2, scale))
+  if (s !== 1) {
+    a.sub(centroid).multiplyScalar(s).add(centroid)
+    b.sub(centroid).multiplyScalar(s).add(centroid)
+    c.sub(centroid).multiplyScalar(s).add(centroid)
+    d.sub(centroid).multiplyScalar(s).add(centroid)
+  }
+
+  const slopeNormal = new THREE.Vector3()
+    .subVectors(b, a)
+    .cross(new THREE.Vector3().subVectors(c, a))
+  if (slopeNormal.lengthSq() < 1e-10) {
+    slopeNormal.subVectors(d, a).cross(new THREE.Vector3().subVectors(b, a))
+  }
+  slopeNormal.normalize()
+
+  const projectOntoPlane = (p) => {
+    const v = new THREE.Vector3().subVectors(p, centroid)
+    const dot = v.dot(slopeNormal)
+    return new THREE.Vector3(
+      p.x - slopeNormal.x * dot,
+      p.y - slopeNormal.y * dot,
+      p.z - slopeNormal.z * dot
+    )
+  }
+
+  const aProj = projectOntoPlane(a)
+  const bProj = projectOntoPlane(b)
+  const cProj = projectOntoPlane(c)
+  const dProj = projectOntoPlane(d)
+
+  const acBdCross = segmentsIntersectInXZ(
+    aProj.x, aProj.z, cProj.x, cProj.z,
+    bProj.x, bProj.z, dProj.x, dProj.z
+  )
+
+  let p0, p1, p2, p3
+  if (acBdCross) {
+    p0 = aProj
+    p1 = bProj
+    p2 = cProj
+    p3 = dProj
+  } else {
+    p0 = aProj
+    p1 = bProj
+    p2 = dProj
+    p3 = cProj
+  }
+
+  const minY = Math.min(a.y, b.y, c.y, d.y)
+  const p0_ = new THREE.Vector3(p0.x, minY, p0.z)
+  const p1_ = new THREE.Vector3(p1.x, minY, p1.z)
+  const p2_ = new THREE.Vector3(p2.x, minY, p2.z)
+  const p3_ = new THREE.Vector3(p3.x, minY, p3.z)
+
+  const baseW = (p0_.distanceTo(p1_) + p2_.distanceTo(p3_)) * 0.5
+  const baseD = (p0_.distanceTo(p3_) + p1_.distanceTo(p2_)) * 0.5
+  const slopeW = (p0.distanceTo(p1) + p2.distanceTo(p3)) * 0.5
+  const slopeLen = (p0.distanceTo(p3) + p1.distanceTo(p2)) * 0.5
+  const side0H = p0.distanceTo(p3)
+  const side1H = p1.distanceTo(p2)
+  const lowW = p0_.distanceTo(p1_)
+  const highW = p2_.distanceTo(p3_)
+  const lowRise = Math.max(0.01, (p0.y + p1.y) * 0.5 - minY)
+  const highRise = Math.max(0.01, (p2.y + p3.y) * 0.5 - minY)
+
+  const positions = []
+  const uvs = []
+  const pushQuad = (v0, v1, v2, v3, w, h) => {
+    positions.push(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z)
+    positions.push(v0.x, v0.y, v0.z, v2.x, v2.y, v2.z, v3.x, v3.y, v3.z)
+    uvs.push(0, 0, w, 0, w, h, 0, 0, w, h, 0, h)
+  }
+
+  pushQuad(p0_, p3_, p2_, p1_, baseW, baseD)
+  pushQuad(p0, p1, p2, p3, slopeW, slopeLen)
+  pushQuad(p0_, p0, p3, p3_, baseD, side0H)
+  pushQuad(p1_, p1, p2, p2_, baseD, side1H)
+  pushQuad(p0_, p1_, p1, p0, lowW, lowRise)
+  pushQuad(p3_, p2_, p2, p3, highW, highRise)
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.computeVertexNormals()
+  return geometry
+}
+
+function createRampMeshFromParams(size, position, rotation) {
+  const [rampWidth, rampRise, rampRun] = size
+  const geometry = createWedgeGeometry(rampWidth, rampRise, rampRun)
+  geometry.translate(0, 0, rampRun / 2)
+  const texture = resolveBrushTexture(resolveBrushTextureInfo({ key: 'maze' }))
+  const material = createBrushMaterial(texture, brushes.length * 4, useLitMaterials)
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.material.side = THREE.DoubleSide
+  mesh.position.fromArray(position)
+  mesh.rotation.fromArray(rotation)
+  mesh.castShadow = useLitMaterials
+  mesh.receiveShadow = useLitMaterials
+  mesh.userData.isBrush = true
+  mesh.userData.type = 'ramp'
+  mesh.userData.size = [...size]
+  mesh.userData.id = crypto.randomUUID()
+  mesh.userData.isUserBrush = true
+  applyMazeFloorTexture(mesh)
+  return mesh
+}
+
+function addRampBrush(pointA, pointB, rampWidth, scale = 1) {
+  const { rampRun, effectiveRise, posX, posY, posZ, rotY } = computeRampParams(
+    pointA,
+    pointB,
+    rampWidth,
+    scale
+  )
+
+  const geometry = createWedgeGeometry(rampWidth, effectiveRise, rampRun)
+  geometry.translate(0, 0, rampRun / 2)
+
+  const texture = resolveBrushTexture(resolveBrushTextureInfo({ key: 'maze' }))
+  const material = createBrushMaterial(texture, brushes.length * 4, useLitMaterials)
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.material.side = THREE.DoubleSide
+
+  mesh.position.set(posX, posY, posZ)
+  mesh.rotation.y = rotY
+
+  mesh.castShadow = useLitMaterials
+  mesh.receiveShadow = useLitMaterials
+  mesh.userData.isBrush = true
+  mesh.userData.type = 'ramp'
+  mesh.userData.size = [rampWidth, effectiveRise, rampRun]
+  mesh.userData.id = crypto.randomUUID()
+  mesh.userData.isUserBrush = true
+  applyMazeFloorTexture(mesh)
+  scene.add(mesh)
+  brushes.push(mesh)
+  updateSceneList()
+  return mesh
+}
+
+function addRampBrushFrom4Points(pointA, pointB, pointC, pointD, scale = 1) {
+  const geometry = createRampGeometryFrom4Points(pointA, pointB, pointC, pointD, scale)
+
+  const texture = resolveBrushTexture(resolveBrushTextureInfo({ key: 'maze' }))
+  const material = createBrushMaterial(texture, brushes.length * 4, useLitMaterials)
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.material.side = THREE.DoubleSide
+
+  mesh.castShadow = useLitMaterials
+  mesh.receiveShadow = useLitMaterials
+  mesh.userData.isBrush = true
+  mesh.userData.type = 'ramp'
+  mesh.userData.rampPoints = [pointA, pointB, pointC, pointD]
+  mesh.userData.rampScale = scale
+  mesh.userData.id = crypto.randomUUID()
+  mesh.userData.isUserBrush = true
+  applyMazeFloorTexture(mesh)
+  scene.add(mesh)
+  brushes.push(mesh)
+  updateSceneList()
+  return mesh
+}
+
+function mazeGridToFloorMeshes(
+  cols,
+  rows,
+  spaceBetweenWalls,
+  floorOptions,
+  offset = [0, 0, 0],
+  rotation = null
+) {
+  const flatThickness =
+    (floorOptions?.flatFloorSize ?? Math.max(0.1, spaceBetweenWalls * 0.1)) || 0.1
+
+  const w = cols * 2 + 1
+  const h = rows * 2 + 1
+  const unitSize = spaceBetweenWalls
+  const ox = ((w - 1) / 2) * unitSize
+  const oz = ((h - 1) / 2) * unitSize
   const [offX, offY, offZ] = offset
-  for (let x = 0; x < cols; x++) {
-    for (let z = 0; z < rows; z++) {
-      if (grid[x][z] !== 1) continue
-      const localX = x * tileSize - ox
-      const localZ = z * tileSize - oz
+
+  for (let x = 0; x < w; x++) {
+    for (let z = 0; z < h; z++) {
+      const localX = x * unitSize - ox
+      const localZ = z * unitSize - oz
       const rotated = rotateArenaPoint(localX, localZ, rotation)
       const px = rotated.x + offX
       const pz = rotated.z + offZ
-      const mesh = addBrushMesh([tileSize, wallHeight, tileSize], [px, wallHeight / 2 + offY, pz])
-      mesh.userData.generator = 'arena'
-      mesh.userData.subtype = 'arena-wall'
-      if (activeGenerationGroup) mesh.userData.generatorGroup = activeGenerationGroup
-      applyArenaBaseTexture(mesh)
-      if (rotation) mesh.rotation.copy(rotation)
-      if (activeGenerationCollector) activeGenerationCollector.push(mesh)
+
+      const flatFloorY = flatThickness / 2 + offY
+      addMazeFloorCell([unitSize, flatThickness, unitSize], [px, flatFloorY, pz], rotation)
+    }
+  }
+}
+
+function arenaGridsToMeshes(grids, tileSize, storeyHeight, offset = [0, 0, 0], rotation = null) {
+  const [offX, offY, offZ] = offset
+  for (let s = 0; s < grids.length; s++) {
+    const grid = grids[s]
+    const cols = grid.length
+    const rows = grid[0].length
+    const ox = ((cols - 1) / 2) * tileSize
+    const oz = ((rows - 1) / 2) * tileSize
+    const storeyBaseY = offY + s * storeyHeight
+    const wallCenterY = storeyBaseY + storeyHeight / 2
+    for (let x = 0; x < cols; x++) {
+      for (let z = 0; z < rows; z++) {
+        if (grid[x][z] !== 1) continue
+        const localX = x * tileSize - ox
+        const localZ = z * tileSize - oz
+        const rotated = rotateArenaPoint(localX, localZ, rotation)
+        const px = rotated.x + offX
+        const pz = rotated.z + offZ
+        const mesh = addBrushMesh([tileSize, storeyHeight, tileSize], [px, wallCenterY, pz])
+        mesh.userData.generator = 'arena'
+        mesh.userData.subtype = 'arena-wall'
+        mesh.userData.storey = s
+        if (activeGenerationGroup) mesh.userData.generatorGroup = activeGenerationGroup
+        applyArenaBaseTexture(mesh)
+        if (rotation) mesh.rotation.copy(rotation)
+        if (activeGenerationCollector) activeGenerationCollector.push(mesh)
+      }
     }
   }
 }
@@ -937,7 +1585,7 @@ function cloneCells(cells) {
 
 function cloneArenaState(arena) {
   return {
-    grid: cloneGrid(arena.grid),
+    grids: arena.grids.map((g) => cloneGrid(g)),
     spawns: cloneCells(arena.spawns),
     flags: cloneCells(arena.flags),
     collisionPoints: cloneCells(arena.collisionPoints),
@@ -973,6 +1621,7 @@ function generateMaze() {
     exitWidth: ctrl.exitWidth,
     centerRoomSize: ctrl.centerRoomSize,
     layout: ctrl.layout,
+    roomCount: ctrl.roomCount,
   })
   if (lastMazeState) {
     let attempts = 0
@@ -983,6 +1632,7 @@ function generateMaze() {
         exitWidth: ctrl.exitWidth,
         centerRoomSize: ctrl.centerRoomSize,
         layout: ctrl.layout,
+        roomCount: ctrl.roomCount,
       })
       attempts += 1
     }
@@ -993,10 +1643,8 @@ function generateMaze() {
   const baseOffset = getPreviewBaseOffset(preview, ctrl.wallHeight)
   const baseRotation = preview?.rotation ? preview.rotation.clone() : null
   beginGenerationCollector()
-  const mazeWidth = (cols * 2) * ctrl.spaceBetweenWalls
-  const mazeDepth = (rows * 2) * ctrl.spaceBetweenWalls
-  const floorThickness = Math.max(0.1, ctrl.spaceBetweenWalls * 0.1)
-  addMazeFloor(mazeWidth, mazeDepth, floorThickness, baseOffset, baseRotation)
+  const floorOptions = { flatFloorSize: ctrl.flatFloorSize }
+  mazeGridToFloorMeshes(cols, rows, ctrl.spaceBetweenWalls, floorOptions, baseOffset, baseRotation)
   mazeGridToMeshes(
     grid,
     cols,
@@ -1082,8 +1730,9 @@ function createArenaPreviewMesh(size, position) {
 function ensureArenaPreview() {
   if (arenaPreview && brushes.includes(arenaPreview)) return arenaPreview
   const ctrl = getArenaControls()
-  const size = [ctrl.cols * ctrl.tileSize, ctrl.wallHeight, ctrl.rows * ctrl.tileSize]
-  const position = [0, ctrl.wallHeight / 2, 0]
+  const totalHeight = ctrl.wallHeight
+  const size = [ctrl.cols * ctrl.tileSize, totalHeight, ctrl.rows * ctrl.tileSize]
+  const position = [0, totalHeight / 2, 0]
   arenaPreview = createArenaPreviewMesh(size, position)
   arenaPreview.userData.id = crypto.randomUUID()
   arenaPreview.userData.arenaCols = ctrl.cols
@@ -1098,19 +1747,20 @@ function updateArenaPreviewFromControls() {
   const obstacleInput = document.getElementById('arena-obstacle-height')
   const obstacleValue = document.getElementById('arena-obstacle-height-value')
   if (obstacleInput) {
-    obstacleInput.max = String(ctrl.wallHeight)
+    obstacleInput.max = String(ctrl.wallHeightCm)
     const obstacleInputValue = parseFloat(obstacleInput.value)
-    const shouldTrackWall = Math.abs(obstacleInputValue - lastArenaWallHeight) < 0.001
+    const shouldTrackWall = Math.abs(obstacleInputValue - lastArenaWallHeightCm) < 0.001
     if (shouldTrackWall) {
-      obstacleInput.value = String(ctrl.wallHeight)
-      if (obstacleValue) obstacleValue.textContent = String(ctrl.wallHeight)
-    } else if (ctrl.obstacleHeight < obstacleInputValue) {
-      obstacleInput.value = String(ctrl.obstacleHeight)
-      if (obstacleValue) obstacleValue.textContent = String(ctrl.obstacleHeight)
+      obstacleInput.value = String(ctrl.wallHeightCm)
+      if (obstacleValue) obstacleValue.textContent = String(ctrl.wallHeightCm)
+    } else if (ctrl.obstacleHeight * CM_PER_UNIT < obstacleInputValue) {
+      obstacleInput.value = String(Math.round(ctrl.obstacleHeight * CM_PER_UNIT))
+      if (obstacleValue) obstacleValue.textContent = obstacleInput.value
     }
   }
-  lastArenaWallHeight = ctrl.wallHeight
-  const size = [ctrl.cols * ctrl.tileSize, ctrl.wallHeight, ctrl.rows * ctrl.tileSize]
+  lastArenaWallHeightCm = ctrl.wallHeightCm
+  const totalHeight = ctrl.wallHeight
+  const size = [ctrl.cols * ctrl.tileSize, totalHeight, ctrl.rows * ctrl.tileSize]
   const preview = ensureArenaPreview()
   preview.geometry.dispose()
   preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
@@ -1119,7 +1769,7 @@ function updateArenaPreviewFromControls() {
   preview.userData.arenaRows = ctrl.rows
   refreshOutline(preview)
   if (!preview.position || Number.isNaN(preview.position.y)) {
-    preview.position.set(0, ctrl.wallHeight / 2, 0)
+    preview.position.set(0, totalHeight / 2, 0)
   }
 }
 
@@ -1233,8 +1883,8 @@ function syncArenaControlsFromPreview(preview, scale) {
   const wallHeightInput = document.getElementById('arena-height')
   const wallHeightValueEl = document.getElementById('arena-height-value')
   const wallHeightCm = parseFloat(wallHeightInput?.value ?? '100')
-  const wallHeightUnits = preview.userData.size?.[1] ?? wallHeightCm / CM_PER_UNIT
-  const scaledHeightUnits = wallHeightUnits * scale.y
+  const baseTotalHeightUnits = preview.userData.size?.[1] ?? wallHeightCm / CM_PER_UNIT
+  const scaledHeightUnits = baseTotalHeightUnits * scale.y
   const baseOffset = getPreviewBaseOffset(preview, scaledHeightUnits)
   const colsEl = document.getElementById('arena-cols')
   const rowsEl = document.getElementById('arena-rows')
@@ -1257,8 +1907,7 @@ function syncArenaControlsFromPreview(preview, scale) {
   if (wallHeightInput) {
     const minHeightCm = parseFloat(wallHeightInput.min ?? '0')
     const maxHeightCm = parseFloat(wallHeightInput.max ?? '999')
-    const baseHeightUnits = preview.userData.size?.[1] ?? wallHeightCm / CM_PER_UNIT
-    const nextWallHeightUnits = clamp(baseHeightUnits * scale.y, minHeightCm / CM_PER_UNIT, maxHeightCm / CM_PER_UNIT)
+    const nextWallHeightUnits = clamp(baseTotalHeightUnits * scale.y, minHeightCm / CM_PER_UNIT, maxHeightCm / CM_PER_UNIT)
     nextWallHeightCm = Math.round(nextWallHeightUnits * CM_PER_UNIT)
     nextWallHeightCm = clamp(nextWallHeightCm, minHeightCm, maxHeightCm)
     wallHeightInput.value = String(nextWallHeightCm)
@@ -1339,27 +1988,40 @@ function syncMazeControlsFromPreview(preview, scale) {
   preview.position.set(baseOffset[0], baseOffset[1] + nextWallHeightUnits / 2, baseOffset[2])
 }
 
-function addArenaFloor(cols, rows, tileSize, offset = [0, 0, 0], rotation = null) {
+function addArenaFloors(cols, rows, tileSize, storeyHeight, offset = [0, 0, 0], rotation = null) {
   const thickness = Math.max(0.1, tileSize * 0.1)
-  const width = cols * tileSize
-  const depth = rows * tileSize
-  const position = [offset[0], thickness / 2 + offset[1], offset[2]]
-  const mesh = createBrushMesh([width, thickness, depth], position, brushes.length * 4, {
-    index: TEXTURE_INDEX.arenaBase,
-  })
-  applyArenaBaseTexture(mesh)
-  mesh.userData.id = crypto.randomUUID()
-  mesh.userData.isUserBrush = false
-  mesh.userData.generator = 'arena'
-  mesh.userData.subtype = 'arena-floor'
-  if (activeGenerationGroup) mesh.userData.generatorGroup = activeGenerationGroup
-  mesh.castShadow = false
-  mesh.receiveShadow = false
-  scene.add(mesh)
-  brushes.push(mesh)
-  if (activeGenerationCollector) activeGenerationCollector.push(mesh)
-  if (rotation) mesh.rotation.copy(rotation)
-  return mesh
+  const ox = ((cols - 1) / 2) * tileSize
+  const oz = ((rows - 1) / 2) * tileSize
+  const [offX, offY, offZ] = offset
+  const meshes = []
+  const floorY = offY + thickness / 2
+  for (let x = 0; x < cols; x++) {
+    for (let z = 0; z < rows; z++) {
+      const localX = x * tileSize - ox
+      const localZ = z * tileSize - oz
+        const rotated = rotateArenaPoint(localX, localZ, rotation)
+        const px = rotated.x + offX
+        const pz = rotated.z + offZ
+        const mesh = createBrushMesh([tileSize, thickness, tileSize], [px, floorY, pz], brushes.length * 4, {
+          index: TEXTURE_INDEX.arenaBase,
+        })
+        applyArenaBaseTexture(mesh)
+        mesh.userData.id = crypto.randomUUID()
+        mesh.userData.isUserBrush = false
+        mesh.userData.generator = 'arena'
+        mesh.userData.subtype = 'arena-floor'
+        mesh.userData.storey = 0
+        if (activeGenerationGroup) mesh.userData.generatorGroup = activeGenerationGroup
+        mesh.castShadow = false
+        mesh.receiveShadow = false
+        scene.add(mesh)
+        brushes.push(mesh)
+        if (activeGenerationCollector) activeGenerationCollector.push(mesh)
+        if (rotation) mesh.rotation.copy(rotation)
+        meshes.push(mesh)
+    }
+  }
+  return meshes
 }
 
 function getPreviewBaseOffset(preview, height) {
@@ -1369,55 +2031,64 @@ function getPreviewBaseOffset(preview, height) {
 }
 
 function placeArenaMarkers(arena, tileSize, wallHeight, obstacleHeight, offset = [0, 0, 0], rotation = null) {
-  const cols = arena.grid.length
-  const rows = arena.grid[0].length
+  const grid = arena.grids[0]
+  const cols = grid.length
+  const rows = grid[0].length
   const ox = ((cols - 1) / 2) * tileSize
   const oz = ((rows - 1) / 2) * tileSize
   const [offX, offY, offZ] = offset
 
-  const cellToWorld = (cell) => ({
-    x: cell.x * tileSize - ox,
-    z: cell.z * tileSize - oz,
-  })
+  const cellToWorld = (cell) => {
+    const floor = cell.floor ?? 0
+    const baseY = offY + floor * wallHeight
+    return {
+      x: cell.x * tileSize - ox,
+      z: cell.z * tileSize - oz,
+      baseY,
+    }
+  }
 
   const markerBaseHeight = Math.min(wallHeight, obstacleHeight)
   const spawnHeight = markerBaseHeight * 0.7
   const spawnRadius = tileSize * 0.3
   arena.spawns.forEach((cell) => {
-    const pos = cellToWorld(cell)
-    const rotated = rotateArenaPoint(pos.x, pos.z, rotation)
-    addArenaMarkerCylinder(spawnRadius, spawnHeight, [rotated.x + offX, spawnHeight / 2 + offY, rotated.z + offZ])
+    const { x, z, baseY } = cellToWorld(cell)
+    const rotated = rotateArenaPoint(x, z, rotation)
+    addArenaMarkerCylinder(spawnRadius, spawnHeight, [rotated.x + offX, baseY + spawnHeight / 2, rotated.z + offZ])
   })
 
   const flagHeight = markerBaseHeight * 0.5
   const flagRadius = tileSize * 0.22
   arena.flags.forEach((cell) => {
-    const pos = cellToWorld(cell)
-    const rotated = rotateArenaPoint(pos.x, pos.z, rotation)
-    addArenaMarkerCylinder(flagRadius, flagHeight, [rotated.x + offX, flagHeight / 2 + offY, rotated.z + offZ])
+    const { x, z, baseY } = cellToWorld(cell)
+    const rotated = rotateArenaPoint(x, z, rotation)
+    addArenaMarkerCylinder(flagRadius, flagHeight, [rotated.x + offX, baseY + flagHeight / 2, rotated.z + offZ])
   })
 
   const collisionHeight = markerBaseHeight * 0.6
   const collisionRadius = tileSize * 0.25
   arena.collisionPoints.forEach((cell) => {
-    const pos = cellToWorld(cell)
-    const rotated = rotateArenaPoint(pos.x, pos.z, rotation)
-    addArenaMarkerCylinder(collisionRadius, collisionHeight, [rotated.x + offX, collisionHeight / 2 + offY, rotated.z + offZ])
+    const { x, z, baseY } = cellToWorld(cell)
+    const rotated = rotateArenaPoint(x, z, rotation)
+    addArenaMarkerCylinder(collisionRadius, collisionHeight, [rotated.x + offX, baseY + collisionHeight / 2, rotated.z + offZ])
   })
 
   const coverHeight = obstacleHeight * 0.9
   const coverSize = tileSize * 0.5
   arena.covers.forEach((cell) => {
-    const pos = cellToWorld(cell)
-    const rotated = rotateArenaPoint(pos.x, pos.z, rotation)
-    const mesh = addArenaCover([coverSize, coverHeight, coverSize], [rotated.x + offX, coverHeight / 2 + offY, rotated.z + offZ])
+    const { x, z, baseY } = cellToWorld(cell)
+    const rotated = rotateArenaPoint(x, z, rotation)
+    const mesh = addArenaCover([coverSize, coverHeight, coverSize], [rotated.x + offX, baseY + coverHeight / 2, rotated.z + offZ])
     if (rotation) mesh.rotation.copy(rotation)
   })
+
 }
 
 function generateArena() {
   pushUndoState()
   if (!updateArenaPreviewValidity()) return
+
+  removeGeneratedBrushes(lastArenaBrushes)
 
   arenaGenerationCount += 1
   lastArenaGroupId = `arena_${String(arenaGenerationCount).padStart(2, '0')}`
@@ -1435,7 +2106,7 @@ function generateArena() {
   })
   if (lastArenaState) {
     let attempts = 0
-    while (attempts < 5 && gridsEqual(arena.grid, lastArenaState.grid)) {
+    while (attempts < 5 && gridsEqual(arena.grids[0], lastArenaState.grids[0])) {
       arena = generateArenaGrid({
         cols: ctrl.cols,
         rows: ctrl.rows,
@@ -1451,11 +2122,19 @@ function generateArena() {
   }
 
   const preview = ensureArenaPreview()
-  const baseOffset = getPreviewBaseOffset(preview, ctrl.wallHeight)
+  const totalHeight = ctrl.wallHeight
+  const baseOffset = getPreviewBaseOffset(preview, totalHeight)
   const baseRotation = preview?.rotation ? preview.rotation.clone() : null
   beginGenerationCollector()
-  addArenaFloor(ctrl.cols, ctrl.rows, ctrl.tileSize, baseOffset, baseRotation)
-  arenaGridToMeshes(arena.grid, ctrl.tileSize, ctrl.wallHeight, baseOffset, baseRotation)
+  addArenaFloors(
+    ctrl.cols,
+    ctrl.rows,
+    ctrl.tileSize,
+    ctrl.wallHeight,
+    baseOffset,
+    baseRotation
+  )
+  arenaGridsToMeshes(arena.grids, ctrl.tileSize, ctrl.wallHeight, baseOffset, baseRotation)
   placeArenaMarkers(arena, ctrl.tileSize, ctrl.wallHeight, ctrl.obstacleHeight, baseOffset, baseRotation)
   lastArenaBrushes = endGenerationCollector()
 
@@ -1487,6 +2166,7 @@ function regenerateMazeFromLast() {
     exitWidth: ctrl.exitWidth,
     centerRoomSize: ctrl.centerRoomSize,
     layout: ctrl.layout,
+    roomCount: ctrl.roomCount,
   })
   let attempts = 0
   while (attempts < 5 && lastMazeState && gridsEqual(mazeResult.grid, lastMazeState.grid)) {
@@ -1496,16 +2176,15 @@ function regenerateMazeFromLast() {
       exitWidth: ctrl.exitWidth,
       centerRoomSize: ctrl.centerRoomSize,
       layout: ctrl.layout,
+      roomCount: ctrl.roomCount,
     })
     attempts += 1
   }
   const { grid, cols, rows } = mazeResult
   const baseOffset = lastMazePlacement?.offset ?? [0, 0, 0]
   const baseRotation = lastMazePlacement?.rotation ? lastMazePlacement.rotation.clone() : null
-  const mazeWidth = (cols * 2) * ctrl.spaceBetweenWalls
-  const mazeDepth = (rows * 2) * ctrl.spaceBetweenWalls
-  const floorThickness = Math.max(0.1, ctrl.spaceBetweenWalls * 0.1)
-  addMazeFloor(mazeWidth, mazeDepth, floorThickness, baseOffset, baseRotation)
+  const floorOptions = { flatFloorSize: ctrl.flatFloorSize }
+  mazeGridToFloorMeshes(cols, rows, ctrl.spaceBetweenWalls, floorOptions, baseOffset, baseRotation)
   mazeGridToMeshes(
     grid,
     cols,
@@ -1548,7 +2227,7 @@ function regenerateArenaFromLast() {
     candidates: ctrl.candidates,
   })
   let attempts = 0
-  while (attempts < 5 && lastArenaState && gridsEqual(arena.grid, lastArenaState.grid)) {
+  while (attempts < 5 && lastArenaState && gridsEqual(arena.grids[0], lastArenaState.grids[0])) {
     arena = generateArenaGrid({
       cols: ctrl.cols,
       rows: ctrl.rows,
@@ -1561,12 +2240,19 @@ function regenerateArenaFromLast() {
     })
     attempts += 1
   }
-  const cols = arena.grid.length
-  const rows = arena.grid[0]?.length ?? 0
+  const cols = arena.grids[0].length
+  const rows = arena.grids[0][0]?.length ?? 0
   const baseOffset = lastArenaPlacement?.offset ?? [0, 0, 0]
   const baseRotation = lastArenaPlacement?.rotation ? lastArenaPlacement.rotation.clone() : null
-  addArenaFloor(cols, rows, ctrl.tileSize, baseOffset, baseRotation)
-  arenaGridToMeshes(arena.grid, ctrl.tileSize, ctrl.wallHeight, baseOffset, baseRotation)
+  addArenaFloors(
+    cols,
+    rows,
+    ctrl.tileSize,
+    ctrl.wallHeight,
+    baseOffset,
+    baseRotation
+  )
+  arenaGridsToMeshes(arena.grids, ctrl.tileSize, ctrl.wallHeight, baseOffset, baseRotation)
   placeArenaMarkers(
     arena,
     ctrl.tileSize,
@@ -1583,19 +2269,33 @@ function regenerateArenaFromLast() {
   selectBrush(null)
   updateSceneList()
 }
+const useFatLines = !/Win/i.test(navigator.platform || navigator.userAgent)
+
 function addOutline(mesh) {
-  if (mesh.userData.outline) return
+  if (mesh.userData.outline || outlineWidth <= 0) return
   const edges = new THREE.EdgesGeometry(mesh.geometry, 1)
-  const outlineGeom = new LineSegmentsGeometry()
-  outlineGeom.fromEdgesGeometry(edges)
-  edges.dispose()
-  const outlineMat = new LineMaterial({
-    color: OUTLINE_COLOR,
-    linewidth: outlineWidth,
-  })
-  outlineMat.resolution.set(viewport.clientWidth, viewport.clientHeight)
-  const outline = new LineSegments2(outlineGeom, outlineMat)
+  let outline
+  if (useFatLines) {
+    try {
+      const outlineGeom = new LineSegmentsGeometry()
+      outlineGeom.fromEdgesGeometry(edges)
+      edges.dispose()
+      const outlineMat = new LineMaterial({
+        color: OUTLINE_COLOR,
+        linewidth: outlineWidth,
+      })
+      const vw = Math.max(1, viewport.clientWidth)
+      const vh = Math.max(1, viewport.clientHeight)
+      outlineMat.resolution.set(vw, vh)
+      outline = new LineSegments2(outlineGeom, outlineMat)
+    } catch (_) {
+      outline = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: OUTLINE_COLOR }))
+    }
+  } else {
+    outline = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: OUTLINE_COLOR }))
+  }
   outline.raycast = () => {}
+  outline.renderOrder = 1
   outline.userData.isOutline = true
   mesh.add(outline)
   mesh.userData.outline = outline
@@ -1616,10 +2316,14 @@ function refreshOutline(mesh) {
   if (!outline) return
   outline.geometry.dispose()
   const edges = new THREE.EdgesGeometry(mesh.geometry, 1)
-  const outlineGeom = new LineSegmentsGeometry()
-  outlineGeom.fromEdgesGeometry(edges)
-  edges.dispose()
-  outline.geometry = outlineGeom
+  if (outline instanceof LineSegments2) {
+    const outlineGeom = new LineSegmentsGeometry()
+    outlineGeom.fromEdgesGeometry(edges)
+    edges.dispose()
+    outline.geometry = outlineGeom
+  } else {
+    outline.geometry = edges
+  }
 }
 
 function updateOutlineResolution(width, height) {
@@ -1662,6 +2366,15 @@ function cloneBrush(mesh) {
       brushes.length * 4,
       { key: mesh.userData.textureKey, index: mesh.userData.textureIndex }
     )
+  } else if (mesh.userData.type === 'ramp' && mesh.userData.rampPoints) {
+    clone = addRampBrushFrom4Points(
+      mesh.userData.rampPoints[0],
+      mesh.userData.rampPoints[1],
+      mesh.userData.rampPoints[2],
+      mesh.userData.rampPoints[3],
+      mesh.userData.rampScale ?? 1
+    )
+    return clone
   } else if (mesh.userData.type === 'imported') {
     clone = mesh.clone()
     clone.geometry = mesh.geometry.clone()
@@ -1700,6 +2413,11 @@ function deleteSelected() {
   selectedBrush.material.dispose()
   selectBrush(null)
   updateSceneList()
+  showToast('Object removed.', {
+    type: 'undo',
+    recoveryLabel: 'Undo',
+    onRecovery: undo,
+  })
 }
 
 // Raycast for click selection
@@ -1806,6 +2524,44 @@ function bakeScaleIntoGeometry(mesh) {
     return
   }
 
+  if (mesh.userData.type === 'ramp') {
+    if (mesh.userData.rampPoints) {
+      const points = mesh.userData.rampPoints
+      const centroid = new THREE.Vector3()
+      points.forEach((p) => centroid.add(new THREE.Vector3(p[0], p[1], p[2])))
+      centroid.divideScalar(4)
+      const baseY = Math.min(...points.map((p) => p[1]))
+      const scaleVec = new THREE.Vector3(s.x, s.y, s.z)
+      const newPoints = points.map((p) => {
+        const v = new THREE.Vector3(p[0], p[1], p[2])
+        v.x = centroid.x + (v.x - centroid.x) * scaleVec.x
+        v.z = centroid.z + (v.z - centroid.z) * scaleVec.z
+        v.y = baseY + (v.y - baseY) * scaleVec.y
+        return v.toArray()
+      })
+      mesh.userData.rampPoints = newPoints
+      mesh.geometry.dispose()
+      mesh.geometry = createRampGeometryFrom4Points(
+        newPoints[0],
+        newPoints[1],
+        newPoints[2],
+        newPoints[3],
+        mesh.userData.rampScale ?? 1
+      )
+    } else {
+      const [rampWidth, rampRise, rampRun] = mesh.userData.size ?? [1, 1, 1]
+      const newWidth = Math.max(0.01, rampWidth * s.x)
+      const newRise = Math.max(0.01, rampRise * s.y)
+      const newRun = Math.max(0.01, rampRun * s.z)
+      mesh.userData.size = [newWidth, newRise, newRun]
+      mesh.geometry.dispose()
+      mesh.geometry = createWedgeGeometry(newWidth, newRise, newRun)
+      mesh.geometry.translate(0, 0, newRun / 2)
+    }
+    mesh.scale.set(1, 1, 1)
+    if (outline) refreshOutline(mesh)
+    return
+  }
   if (mesh.userData.type === 'imported') {
     mesh.geometry.scale(s.x, s.y, s.z)
     mesh.scale.set(1, 1, 1)
@@ -1903,7 +2659,10 @@ function serializeLevel() {
       if (base.type === 'cylinder') {
         base.radius = m.userData.radius
         base.height = m.userData.height
-      } else {
+      } else if (base.type === 'ramp' && m.userData.rampPoints) {
+        base.rampPoints = m.userData.rampPoints.map((p) => [...p])
+        base.rampScale = m.userData.rampScale ?? 1
+      } else if (m.userData.size) {
         base.size = [...m.userData.size]
       }
       return base
@@ -1955,6 +2714,33 @@ function deserializeLevel(data) {
         brushes.length * 4,
         textureInfo
       )
+    } else if (b.type === 'ramp') {
+      if (b.rampPoints && b.rampPoints.length === 4) {
+        const geom = createRampGeometryFrom4Points(
+          b.rampPoints[0],
+          b.rampPoints[1],
+          b.rampPoints[2],
+          b.rampPoints[3],
+          b.rampScale ?? 1
+        )
+        const texture = resolveBrushTexture(resolveBrushTextureInfo({ key: 'maze' }))
+        const material = createBrushMaterial(texture, brushes.length * 4, useLitMaterials)
+        mesh = new THREE.Mesh(geom, material)
+        mesh.material.side = THREE.DoubleSide
+        mesh.userData.type = 'ramp'
+        mesh.userData.rampPoints = b.rampPoints.map((p) => [...p])
+        mesh.userData.rampScale = b.rampScale ?? 1
+        mesh.userData.isBrush = true
+        mesh.userData.id = b.id || crypto.randomUUID()
+        mesh.userData.isUserBrush = true
+        applyMazeFloorTexture(mesh)
+      } else {
+        mesh = createRampMeshFromParams(
+          b.size ?? [1, 1, 1],
+          b.position ?? [0, 0, 0],
+          b.rotation ?? [0, 0, 0]
+        )
+      }
     } else {
       mesh = createBrushMesh(
         b.size ?? [2, 2, 2],
@@ -1964,7 +2750,7 @@ function deserializeLevel(data) {
       )
     }
     mesh.userData.id = b.id || crypto.randomUUID()
-    mesh.position.fromArray(b.position ?? [0, 1, 0])
+    mesh.position.fromArray(b.position ?? (b.type === 'ramp' ? [0, 0, 0] : [0, 1, 0]))
     if (b.rotation) mesh.rotation.fromArray(b.rotation)
     scene.add(mesh)
     brushes.push(mesh)
@@ -2059,6 +2845,7 @@ const { addImportedMeshes, loadLevelFromFile } = createImportSystem({
   scene,
   getUseLitMaterials: () => useLitMaterials,
   addImportedLight,
+  showToast,
 })
 
 // --- Mode tabs ---
@@ -2100,6 +2887,7 @@ function applySkyParams() {
 
 function setEditorMode(mode) {
   editorMode = mode
+  if (rampCreatorState.active) cancelRampCreator()
   document.querySelectorAll('#mode-tabs .tab').forEach((t) => t.classList.remove('active'))
   document.getElementById(`tab-${mode}`).classList.add('active')
   brushControls.classList.toggle('hidden', mode !== 'brush')
@@ -2143,9 +2931,14 @@ document.getElementById('tab-skybox').addEventListener('click', () => setEditorM
 
 // --- Collapsible panels ---
 document.querySelectorAll('.panel-header').forEach((btn) => {
+  const panel = btn.closest('.panel')
+  const syncAriaExpanded = () => {
+    btn.setAttribute('aria-expanded', String(!panel.classList.contains('collapsed')))
+  }
+  syncAriaExpanded()
   btn.addEventListener('click', () => {
-    const panel = btn.closest('.panel')
     panel.classList.toggle('collapsed')
+    syncAriaExpanded()
   })
 })
 
@@ -2168,8 +2961,15 @@ document.getElementById('maze-height').addEventListener('input', (e) => {
 document.getElementById('maze-exit-width').addEventListener('input', (e) => {
   document.getElementById('maze-exit-width-value').textContent = e.target.value
 })
+document.getElementById('maze-room-count').addEventListener('input', (e) => {
+  document.getElementById('maze-room-count-value').textContent = e.target.value
+})
 document.getElementById('maze-center-size').addEventListener('input', (e) => {
   document.getElementById('maze-center-size-value').textContent = e.target.value
+})
+document.getElementById('maze-flat-floor-size')?.addEventListener('input', (e) => {
+  const el = document.getElementById('maze-flat-floor-size-value')
+  if (el) el.textContent = e.target.value
 })
 
 // --- Arena slider value display ---
@@ -2281,7 +3081,9 @@ if (outlineWidthInput) {
   applyOutlineWidth()
 }
 
-// --- Fly movement (WASD + LMB) ---
+// --- Fly movement (WASD + mouse look) ---
+// On Windows: right-click to look (common editor convention). On Mac: left-click.
+const LOOK_BUTTON = /Win/i.test(navigator.platform) ? 2 : 0
 const flyKeys = { w: false, a: false, s: false, d: false, q: false, e: false }
 let flyMouseDown = false
 let lastFlyTime = performance.now()
@@ -2306,7 +3108,7 @@ function shouldIgnoreKeyInput() {
 }
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (e.button === 0) {
+  if (e.button === LOOK_BUTTON) {
     flyMouseDown = true
     if (!isTransformDragging) {
       lockElement.requestPointerLock?.()
@@ -2315,8 +3117,10 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 })
 
 document.addEventListener('pointerup', (e) => {
-  if (e.button === 0) flyMouseDown = false
-  if (e.button === 0) document.exitPointerLock?.()
+  if (e.button === LOOK_BUTTON) {
+    flyMouseDown = false
+    document.exitPointerLock?.()
+  }
   lastLookX = null
   lastLookY = null
 })
@@ -2341,6 +3145,7 @@ document.addEventListener('pointerlockchange', () => {
 })
 
 renderer.domElement.addEventListener('pointermove', (e) => {
+  updateRampCursorPreview(e.clientX, e.clientY)
   if (!isLooking) return
   const dx = e.movementX ?? 0
   const dy = e.movementY ?? 0
@@ -2406,6 +3211,7 @@ function updateCenterRoomVisibility() {
 }
 document.getElementById('maze-start-from-center').addEventListener('change', updateCenterRoomVisibility)
 updateCenterRoomVisibility()
+
 updateIterateButtons()
 document.getElementById('maze-preview-visible')?.addEventListener('change', () => {
   updateMazePreviewVisibility()
@@ -2435,6 +3241,8 @@ const inputHandler = createInputHandler({
   getEditorMode() {
     return editorMode
   },
+  shouldSuppressSelect: () => isRampCreatorActive(),
+  onRampCreatorPick: handleRampCreatorPick,
   deleteSelected,
   cloneBrush,
   pushUndoState,
@@ -2558,8 +3366,20 @@ document.getElementById('directional-light-dir-y').addEventListener('input', app
 document.getElementById('directional-light-dir-z').addEventListener('input', applyDirectionalDirectionFromInputs)
 
 // --- Toolbar ---
-document.getElementById('btn-add-box').addEventListener('click', addBoxBrush)
+document.getElementById('btn-add-floor')?.addEventListener('click', addFloorBrush)
+document.getElementById('btn-add-wall')?.addEventListener('click', addWallBrush)
 document.getElementById('btn-add-cylinder').addEventListener('click', addCylinderBrush)
+document.getElementById('btn-add-ramp')?.addEventListener('click', startRampCreator)
+document.getElementById('btn-ramp-place')?.addEventListener('click', placeRampFromCreator)
+document.getElementById('btn-ramp-cancel')?.addEventListener('click', cancelRampCreator)
+
+
+document.getElementById('ramp-scale')?.addEventListener('input', (e) => {
+  const el = document.getElementById('ramp-scale-value')
+  if (el) el.textContent = e.target.value
+  updateRampPreview()
+  updateRampCreatorStatus()
+})
 document.getElementById('btn-add-point-light')?.addEventListener('click', addPointLight)
 document.getElementById('btn-add-spot-light')?.addEventListener('click', addSpotLight)
 document.getElementById('btn-add-directional-light')?.addEventListener('click', addDirectionalLight)
