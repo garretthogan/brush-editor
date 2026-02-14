@@ -395,6 +395,42 @@ function addCylinderBrush() {
   updateSceneList()
 }
 
+/** Player height in brush-editor units (1 unit = 1 m). Matches occult-shooter PLAYER_HEIGHT_CM (175 cm). */
+const PLAYER_HEIGHT_UNITS = 1.75
+/** Approximate human shoulder width in units (~50 cm). */
+const PLAYER_RADIUS_UNITS = 0.25
+
+function createPlayerStartMesh(position = [0, 0, 0]) {
+  const coneGeom = new THREE.ConeGeometry(PLAYER_RADIUS_UNITS, PLAYER_HEIGHT_UNITS, 12)
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x00aaff,
+    transparent: true,
+    opacity: 0.9,
+  })
+  const mesh = new THREE.Mesh(coneGeom, material)
+  mesh.name = 'player_start'
+  mesh.position.set(...position)
+  mesh.userData.isBrush = true
+  mesh.userData.type = 'player_start'
+  mesh.userData.id = crypto.randomUUID()
+  mesh.userData.isUserBrush = true
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+  return mesh
+}
+
+function addPlayerStartMarker() {
+  pushUndoState()
+  const mesh = createPlayerStartMesh([0, 0, 0])
+  scene.add(mesh)
+  brushes.push(mesh)
+  selectBrush(mesh)
+  setCurrentTool('translate')
+  setTransformMode('translate')
+  focusCameraOnObject(mesh)
+  updateSceneList()
+}
+
 // --- Ramp creator tool (four-point selection: two per end) ---
 const rampCreatorState = { active: false, pointA: null, pointB: null, pointC: null, pointD: null }
 const rampUndoStack = []
@@ -2534,6 +2570,8 @@ function cloneBrush(mesh) {
       mesh.userData.rampScale ?? 1
     )
     return clone
+  } else if (mesh.userData.type === 'player_start') {
+    clone = createPlayerStartMesh(position)
   } else if (mesh.userData.type === 'imported') {
     clone = mesh.clone()
     clone.geometry = mesh.geometry.clone()
@@ -2683,6 +2721,11 @@ function bakeScaleIntoGeometry(mesh) {
     return
   }
 
+  if (mesh.userData.type === 'player_start') {
+    mesh.scale.set(1, 1, 1)
+    if (outline) refreshOutline(mesh)
+    return
+  }
   if (mesh.userData.type === 'ramp') {
     if (mesh.userData.rampPoints) {
       const points = mesh.userData.rampPoints
@@ -2900,6 +2943,8 @@ function deserializeLevel(data) {
           b.rotation ?? [0, 0, 0]
         )
       }
+    } else if (b.type === 'player_start') {
+      mesh = createPlayerStartMesh(b.position ?? [0, 0, 0])
     } else {
       mesh = createBrushMesh(
         b.size ?? [2, 2, 2],
@@ -2909,7 +2954,9 @@ function deserializeLevel(data) {
       )
     }
     mesh.userData.id = b.id || crypto.randomUUID()
-    mesh.position.fromArray(b.position ?? (b.type === 'ramp' ? [0, 0, 0] : [0, 1, 0]))
+    mesh.position.fromArray(
+      b.position ?? (b.type === 'ramp' || b.type === 'player_start' ? [0, 0, 0] : [0, 1, 0])
+    )
     if (b.rotation) mesh.rotation.fromArray(b.rotation)
     scene.add(mesh)
     brushes.push(mesh)
@@ -3561,6 +3608,7 @@ document.getElementById('directional-light-dir-z').addEventListener('input', app
 // --- Toolbar ---
 document.getElementById('btn-add-floor')?.addEventListener('click', addFloorBrush)
 document.getElementById('btn-add-wall')?.addEventListener('click', addWallBrush)
+document.getElementById('btn-add-player-start')?.addEventListener('click', addPlayerStartMarker)
 document.getElementById('btn-add-cylinder').addEventListener('click', addCylinderBrush)
 document.getElementById('btn-add-ramp')?.addEventListener('click', startRampCreator)
 document.getElementById('btn-ramp-place')?.addEventListener('click', placeRampFromCreator)

@@ -31,14 +31,17 @@ export function createImportSystem({
     if (!meshes || meshes.length === 0) return
     pushUndoState()
     meshes.forEach((mesh) => {
-      const tex = loadTextureForSpawn()
-      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-      materials.forEach((mat) => {
-        if (mat && mat.map !== undefined) mat.map = tex
-      })
+      const isPlayerStart = mesh.userData?.type === 'player_start'
+      if (!isPlayerStart) {
+        const tex = loadTextureForSpawn()
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+        materials.forEach((mat) => {
+          if (mat && mat.map !== undefined) mat.map = tex
+        })
+      }
       mesh.userData.isBrush = true
-      mesh.userData.type = 'imported'
-      mesh.userData.id = crypto.randomUUID()
+      if (!isPlayerStart) mesh.userData.type = 'imported'
+      mesh.userData.id = mesh.userData.id || crypto.randomUUID()
       mesh.userData.isUserBrush = true
       mesh.castShadow = getUseLitMaterials()
       mesh.receiveShadow = getUseLitMaterials()
