@@ -12,6 +12,7 @@
         <div id="mode-tabs">
           <button id="tab-brush" class="tab active">Object Editor</button>
           <button id="tab-maze" class="tab">Maze Generator</button>
+          <button id="tab-maze-arena" class="tab">Maze with Arenas</button>
           <button id="tab-arena" class="tab">Arena Generator</button>
           <button id="tab-skybox" class="tab">Preview</button>
         </div>
@@ -158,6 +159,75 @@
                     <label for="maze-center-size">Center room size</label>
                     <input type="range" id="maze-center-size" min="1" max="6" step="1" value="2" aria-describedby="maze-center-size-value" />
                     <span id="maze-center-size-value">2</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="maze-arena-controls" class="mode-panel hidden">
+          <div class="panel collapsible">
+            <button class="panel-header" data-panel="maze-arena-settings">
+              <span class="panel-chevron">▼</span>
+              Maze with Arenas
+            </button>
+            <div class="panel-content" id="panel-maze-arena-settings">
+              <div class="panel-actions">
+                <button id="btn-generate-maze-arena" class="primary">Generate Maze with Arenas</button>
+                <button id="btn-iterate-maze-arena" type="button">Iterate</button>
+              </div>
+              <div class="control-row">
+                <label>
+                  <input type="checkbox" id="maze-arena-preview-visible" checked />
+                  Show preview
+                </label>
+              </div>
+              <div class="control-row">
+                <label for="maze-arena-cols">Maze columns</label>
+                <input type="range" id="maze-arena-cols" min="8" max="30" step="1" value="12" />
+                <span id="maze-arena-cols-value">12</span>
+              </div>
+              <div class="control-row">
+                <label for="maze-arena-rows">Maze rows</label>
+                <input type="range" id="maze-arena-rows" min="8" max="30" step="1" value="12" />
+                <span id="maze-arena-rows-value">12</span>
+              </div>
+              <div class="control-row">
+                <label for="maze-arena-arena-count">Number of arenas</label>
+                <input type="range" id="maze-arena-arena-count" min="2" max="12" step="1" value="4" aria-describedby="maze-arena-arena-count-hint" />
+                <span id="maze-arena-arena-count-value">4</span>
+                <span id="maze-arena-arena-count-hint" class="hint">Rooms with arena interiors</span>
+              </div>
+              <div class="control-row">
+                <label for="maze-arena-space">Space between walls (cm)</label>
+                <input type="range" id="maze-arena-space" min="20" max="2000" step="10" value="200" />
+                <span id="maze-arena-space-value">200</span>
+              </div>
+              <div class="control-row">
+                <label for="maze-arena-thickness">Wall thickness (cm)</label>
+                <input type="range" id="maze-arena-thickness" min="2" max="500" step="5" value="15" />
+                <span id="maze-arena-thickness-value">15</span>
+              </div>
+              <div class="control-row">
+                <label for="maze-arena-height">Wall height (cm)</label>
+                <input type="range" id="maze-arena-height" min="20" max="2000" step="10" value="200" />
+                <span id="maze-arena-height-value">200</span>
+              </div>
+              <div class="panel collapsible collapsed">
+                <button type="button" class="panel-header" data-panel="maze-arena-arena" aria-expanded="false" aria-controls="panel-maze-arena-arena">
+                  <span class="panel-chevron">▼</span>
+                  Arena interior options
+                </button>
+                <div class="panel-content" id="panel-maze-arena-arena">
+                  <div class="control-row">
+                    <label for="maze-arena-density">Obstacle density</label>
+                    <input type="range" id="maze-arena-density" min="0" max="0.6" step="0.05" value="0.25" />
+                    <span id="maze-arena-density-value">0.25</span>
+                  </div>
+                  <div class="control-row">
+                    <label for="maze-arena-buildings">Building count (per arena)</label>
+                    <input type="range" id="maze-arena-buildings" min="0" max="8" step="1" value="2" />
+                    <span id="maze-arena-buildings-value">2</span>
                   </div>
                 </div>
               </div>

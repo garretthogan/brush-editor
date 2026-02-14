@@ -145,16 +145,19 @@ let mazePreview = null
 let lastArenaWallHeightCm = 300
 let lastMazeState = null
 let lastArenaState = null
+let lastMazeArenaState = null
 let lastMazePlacement = null
 let lastArenaPlacement = null
 let lastMazeBrushes = []
 let lastArenaBrushes = []
+let lastMazeArenaBrushes = []
 let activeGenerationCollector = null
 let activeGenerationGroup = null
 let mazeGenerationCount = 0
 let arenaGenerationCount = 0
 let lastMazeGroupId = null
 let lastArenaGroupId = null
+let lastMazeArenaGroupId = null
 
 
 function beginGenerationCollector() {
@@ -174,6 +177,8 @@ function updateIterateButtons() {
   if (mazeBtn) mazeBtn.disabled = !lastMazeState
   const arenaBtn = document.getElementById('btn-iterate-arena')
   if (arenaBtn) arenaBtn.disabled = !lastArenaState
+  const mazeArenaBtn = document.getElementById('btn-iterate-maze-arena')
+  if (mazeArenaBtn) mazeArenaBtn.disabled = !lastMazeArenaState
 }
 
 
@@ -1171,6 +1176,19 @@ function getMazeControls() {
   }
 }
 
+function getMazeArenaControls() {
+  return {
+    cols: parseInt(document.getElementById('maze-arena-cols')?.value ?? '12', 10),
+    rows: parseInt(document.getElementById('maze-arena-rows')?.value ?? '12', 10),
+    arenaCount: parseInt(document.getElementById('maze-arena-arena-count')?.value ?? '4', 10),
+    spaceBetweenWalls: parseFloat(document.getElementById('maze-arena-space')?.value ?? '200') / CM_PER_UNIT,
+    wallThickness: parseFloat(document.getElementById('maze-arena-thickness')?.value ?? '15') / CM_PER_UNIT,
+    wallHeight: parseFloat(document.getElementById('maze-arena-height')?.value ?? '200') / CM_PER_UNIT,
+    density: parseFloat(document.getElementById('maze-arena-density')?.value ?? '0.25'),
+    buildingCount: parseInt(document.getElementById('maze-arena-buildings')?.value ?? '2', 10),
+  }
+}
+
 function getArenaControls() {
   const wallHeightCm = parseFloat(document.getElementById('arena-height').value)
   const obstacleCm = parseFloat(document.getElementById('arena-obstacle-height').value)
@@ -1811,6 +1829,31 @@ function ensureMazePreview() {
   return mazePreview
 }
 
+function ensureMazeArenaPreview() {
+  const ctrl = getMazeArenaControls()
+  const w = ctrl.cols * 2 + 1
+  const h = ctrl.rows * 2 + 1
+  const width = (w - 1) * ctrl.spaceBetweenWalls
+  const depth = (h - 1) * ctrl.spaceBetweenWalls
+  const size = [width, ctrl.wallHeight, depth]
+  const position = [0, ctrl.wallHeight / 2, 0]
+  if (!mazePreview || !brushes.includes(mazePreview)) {
+    mazePreview = createMazePreviewMesh(size, position)
+    mazePreview.userData.id = crypto.randomUUID()
+    mazePreview.userData.isMazePreview = true
+    scene.add(mazePreview)
+    brushes.push(mazePreview)
+  }
+  mazePreview.geometry.dispose()
+  mazePreview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
+  mazePreview.userData.size = [...size]
+  mazePreview.userData.mazeCols = ctrl.cols
+  mazePreview.userData.mazeRows = ctrl.rows
+  mazePreview.position.set(...position)
+  refreshOutline(mazePreview)
+  return mazePreview
+}
+
 function updateMazePreviewFromControls() {
   const ctrl = getMazeControls()
   const w = ctrl.cols * 2 + 1
@@ -2269,6 +2312,122 @@ function regenerateArenaFromLast() {
   selectBrush(null)
   updateSceneList()
 }
+
+let mazeArenaGenerationCount = 0
+
+function generateMazeArena() {
+  pushUndoState()
+  removeGeneratedBrushes(lastMazeArenaBrushes)
+
+  mazeArenaGenerationCount += 1
+  lastMazeArenaGroupId = `maze_arena_${String(mazeArenaGenerationCount).padStart(2, '0')}`
+  activeGenerationGroup = lastMazeArenaGroupId
+
+  const ctrl = getMazeArenaControls()
+  const arenaCount = Math.max(2, Math.min(12, ctrl.arenaCount))
+  const roomMinSize = 3
+  const roomMaxSize = 6
+
+  let mazeResult = generateMazeGrid({
+    cols: ctrl.cols,
+    rows: ctrl.rows,
+    exitWidth: 1,
+    centerRoomSize: 1,
+    layout: 'center-out',
+    roomCount: arenaCount,
+    roomMinSize,
+    roomMaxSize,
+  })
+
+  const { grid, cols, rows, rooms = [] } = mazeResult
+  if (rooms.length === 0) {
+    showToast('Could not place enough rooms. Try increasing maze size or reducing arena count.', { type: 'warn' })
+    return
+  }
+
+  const preview = ensureMazeArenaPreview()
+  const baseOffset = getPreviewBaseOffset(preview, ctrl.wallHeight)
+  const baseRotation = preview?.rotation ? preview.rotation.clone() : null
+
+  const w = cols * 2 + 1
+  const h = rows * 2 + 1
+  const unitSize = ctrl.spaceBetweenWalls
+  const ox = ((w - 1) / 2) * unitSize
+  const oz = ((h - 1) / 2) * unitSize
+  const [offX, offY, offZ] = baseOffset
+
+  beginGenerationCollector()
+  const floorOptions = { flatFloorSize: unitSize * 0.2 }
+  mazeGridToFloorMeshes(cols, rows, unitSize, floorOptions, baseOffset, baseRotation)
+  mazeGridToMeshes(
+    grid,
+    cols,
+    rows,
+    unitSize,
+    ctrl.wallThickness,
+    ctrl.wallHeight,
+    baseOffset,
+    baseRotation
+  )
+
+  for (const room of rooms) {
+    const { gx0, gz0, gx1, gz1 } = room
+    const roomCols = Math.max(3, gx1 - gx0 + 1)
+    const roomRows = Math.max(3, gz1 - gz0 + 1)
+    const roomCenterX = ((gx0 + gx1) / 2) * unitSize - ox
+    const roomCenterZ = ((gz0 + gz1) / 2) * unitSize - oz
+    const roomOffset = [
+      offX + (baseRotation ? 0 : roomCenterX),
+      offY,
+      offZ + (baseRotation ? 0 : roomCenterZ),
+    ]
+    if (baseRotation) {
+      const vec = new THREE.Vector3(roomCenterX, 0, roomCenterZ)
+      vec.applyEuler(baseRotation)
+      roomOffset[0] = offX + vec.x
+      roomOffset[2] = offZ + vec.z
+    }
+
+    const interiorCells = Math.max(0, (roomCols - 2) * (roomRows - 2))
+    const arena = generateArenaGrid({
+      cols: roomCols,
+      rows: roomRows,
+      density: ctrl.density,
+      buildingCount: interiorCells >= 8 ? Math.min(ctrl.buildingCount, Math.floor(interiorCells / 8)) : 0,
+      buildingMinSize: 1,
+      buildingMaxSize: Math.max(1, Math.min(4, Math.floor(roomCols / 2), Math.floor(roomRows / 2))),
+      smoothingPasses: 1,
+      corridorWidth: 1,
+      exitWidth: 1,
+      candidates: 3,
+    })
+
+    arenaGridsToMeshes(arena.grids, unitSize, ctrl.wallHeight, roomOffset, baseRotation)
+    placeArenaMarkers(arena, unitSize, ctrl.wallHeight, ctrl.wallHeight * 0.7, roomOffset, baseRotation)
+  }
+
+  lastMazeArenaBrushes = endGenerationCollector()
+  lastMazeArenaState = {
+    grid: cloneGrid(grid),
+    cols,
+    rows,
+    rooms: rooms.map((r) => ({ ...r })),
+  }
+  updateIterateButtons()
+
+  const checkbox = document.getElementById('maze-arena-preview-visible')
+  if (checkbox) checkbox.checked = false
+  if (mazePreview) mazePreview.visible = false
+
+  selectBrush(null)
+  updateSceneList()
+}
+
+function regenerateMazeArenaFromLast() {
+  if (!lastMazeArenaState) return
+  generateMazeArena()
+}
+
 const useFatLines = !/Win/i.test(navigator.platform || navigator.userAgent)
 
 function addOutline(mesh) {
@@ -2852,6 +3011,7 @@ const { addImportedMeshes, loadLevelFromFile } = createImportSystem({
 let editorMode = 'brush'
 const brushControls = document.getElementById('brush-controls')
 const mazeControls = document.getElementById('maze-controls')
+const mazeArenaControls = document.getElementById('maze-arena-controls')
 const arenaControls = document.getElementById('arena-controls')
 const skyboxControls = document.getElementById('skybox-controls')
 
@@ -2889,9 +3049,10 @@ function setEditorMode(mode) {
   editorMode = mode
   if (rampCreatorState.active) cancelRampCreator()
   document.querySelectorAll('#mode-tabs .tab').forEach((t) => t.classList.remove('active'))
-  document.getElementById(`tab-${mode}`).classList.add('active')
+  document.getElementById(`tab-${mode}`)?.classList.add('active')
   brushControls.classList.toggle('hidden', mode !== 'brush')
   mazeControls.classList.toggle('hidden', mode !== 'maze')
+  mazeArenaControls.classList.toggle('hidden', mode !== 'maze-arena')
   arenaControls.classList.toggle('hidden', mode !== 'arena')
   skyboxControls.classList.toggle('hidden', mode !== 'skybox')
   sky.visible = mode === 'skybox'
@@ -2912,6 +3073,14 @@ function setEditorMode(mode) {
     if (arenaPreview) arenaPreview.visible = false
     setCurrentTool('translate')
     setTransformMode('translate')
+  } else if (mode === 'maze-arena') {
+    ensureMazeArenaPreview()
+    updateMazePreviewValidity()
+    const checkbox = document.getElementById('maze-arena-preview-visible')
+    if (mazePreview) mazePreview.visible = checkbox?.checked ?? true
+    if (arenaPreview) arenaPreview.visible = false
+    setCurrentTool('translate')
+    setTransformMode('translate')
   } else {
     if (arenaPreview) {
       arenaPreview.visible = false
@@ -2926,6 +3095,7 @@ function setEditorMode(mode) {
 
 document.getElementById('tab-brush').addEventListener('click', () => setEditorMode('brush'))
 document.getElementById('tab-maze').addEventListener('click', () => setEditorMode('maze'))
+document.getElementById('tab-maze-arena').addEventListener('click', () => setEditorMode('maze-arena'))
 document.getElementById('tab-arena').addEventListener('click', () => setEditorMode('arena'))
 document.getElementById('tab-skybox').addEventListener('click', () => setEditorMode('skybox'))
 
@@ -3008,6 +3178,23 @@ bindMazeSlider('maze-cols', 'maze-cols-value', updateMazePreviewFromControls)
 bindMazeSlider('maze-rows', 'maze-rows-value', updateMazePreviewFromControls)
 bindMazeSlider('maze-space', 'maze-space-value', updateMazePreviewFromControls)
 bindMazeSlider('maze-height', 'maze-height-value', updateMazePreviewFromControls)
+
+bindMazeSlider('maze-arena-cols', 'maze-arena-cols-value', () => {
+  if (editorMode === 'maze-arena') ensureMazeArenaPreview()
+})
+bindMazeSlider('maze-arena-rows', 'maze-arena-rows-value', () => {
+  if (editorMode === 'maze-arena') ensureMazeArenaPreview()
+})
+bindMazeSlider('maze-arena-arena-count', 'maze-arena-arena-count-value')
+bindMazeSlider('maze-arena-space', 'maze-arena-space-value', () => {
+  if (editorMode === 'maze-arena') ensureMazeArenaPreview()
+})
+bindMazeSlider('maze-arena-thickness', 'maze-arena-thickness-value')
+bindMazeSlider('maze-arena-height', 'maze-arena-height-value', () => {
+  if (editorMode === 'maze-arena') ensureMazeArenaPreview()
+})
+bindMazeSlider('maze-arena-density', 'maze-arena-density-value')
+bindMazeSlider('maze-arena-buildings', 'maze-arena-buildings-value')
 
 // Skybox slider value display and apply
 function bindSkySlider(id, valueId) {
@@ -3221,9 +3408,15 @@ document.getElementById('arena-preview-visible')?.addEventListener('change', () 
   updateArenaPreviewVisibility()
   updateArenaPreviewValidity()
 })
+document.getElementById('maze-arena-preview-visible')?.addEventListener('change', () => {
+  const checkbox = document.getElementById('maze-arena-preview-visible')
+  if (mazePreview) mazePreview.visible = checkbox?.checked ?? true
+})
 
 document.getElementById('btn-generate-arena').addEventListener('click', generateArena)
 document.getElementById('btn-iterate-arena').addEventListener('click', regenerateArenaFromLast)
+document.getElementById('btn-generate-maze-arena').addEventListener('click', generateMazeArena)
+document.getElementById('btn-iterate-maze-arena').addEventListener('click', regenerateMazeArenaFromLast)
 
 // --- Input (command pattern) ---
 const inputHandler = createInputHandler({

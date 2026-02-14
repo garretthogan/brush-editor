@@ -20,7 +20,7 @@
  * @param {number} [options.roomCount=0] - Number of random rooms to carve (0 = no rooms)
  * @param {number} [options.roomMinSize=2] - Min room size in cells (each dimension)
  * @param {number} [options.roomMaxSize=4] - Max room size in cells (each dimension)
- * @returns {{ grid: number[][], cols: number, rows: number }}
+ * @returns {{ grid: number[][], cols: number, rows: number, rooms?: Array<{gx0:number,gz0:number,gx1:number,gz1:number}> }}
  */
 export function generateMaze(options = {}) {
   const {
@@ -151,10 +151,10 @@ export function generateMaze(options = {}) {
     }
   }
 
+  const placed = []
   if (roomCount > 0) {
     const minRw = Math.max(2, Math.min(roomMinSize, roomMaxSize))
     const maxRw = Math.max(minRw, roomMaxSize)
-    const placed = []
     let attempts = 0
     const maxAttempts = roomCount * 50
     while (placed.length < roomCount && attempts < maxAttempts) {
@@ -184,5 +184,5 @@ export function generateMaze(options = {}) {
     }
   }
 
-  return { grid, cols, rows }
+  return { grid, cols, rows, rooms: placed }
 }
