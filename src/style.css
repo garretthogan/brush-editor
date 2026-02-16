@@ -296,18 +296,16 @@ body {
   color: #a0a0a0;
 }
 
-.add-brushes button.active {
-  background: #353535;
-  border-color: #4a9eff;
-  color: #e0e0e0;
-}
-
-.add-brushes,
+.add-entity-actions,
 .brush-actions,
 .add-lights {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.add-entity-actions > button {
+  min-width: 84px;
 }
 
 .tool-divider {
@@ -366,6 +364,68 @@ body {
   color: #e0e0e0;
   cursor: pointer;
   user-select: none;
+}
+
+.entity-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 10, 17, 0.6);
+  backdrop-filter: blur(2px);
+}
+
+.entity-picker-overlay[hidden] {
+  display: none;
+}
+
+.entity-picker-dialog {
+  width: min(440px, calc(100vw - 32px));
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid #2f4660;
+  background: rgba(17, 28, 42, 0.98);
+}
+
+.entity-picker-dialog h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: #e8eef4;
+  text-align: center;
+}
+
+.entity-picker-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.entity-picker-option {
+  border: 1px solid #2f4660;
+  border-radius: 8px;
+  background: #122133;
+  color: #e8eef4;
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  align-items: center;
+  min-height: 88px;
+  cursor: pointer;
+}
+
+.entity-picker-option[hidden] {
+  display: none;
+}
+
+.entity-picker-option:hover {
+  background: #1c324b;
+}
+
+.entity-picker-option > span[aria-hidden="true"] {
+  font-size: 1.25rem;
 }
 
 .scene-list-item {

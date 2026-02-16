@@ -1,5 +1,6 @@
 import './lib/polyfills.js'
 import './style.css'
+import './tui.css'
 import * as THREE from 'three'
 import { initScene } from './lib/scene-setup.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
@@ -660,7 +661,6 @@ function startRampCreator() {
   rampCreatorState.pointD = null
   document.getElementById('ramp-creator-panel')?.classList.remove('hidden')
   document.getElementById('panel-brush-tools')?.closest('.panel')?.classList.remove('collapsed')
-  document.getElementById('btn-add-ramp')?.classList.add('active')
   updateRampCreatorStatus()
   document.getElementById('btn-ramp-place').disabled = true
   showToast('Click first point of low end (e.g. left corner).', { type: 'info' })
@@ -695,7 +695,6 @@ function cancelRampCreator() {
   clearRampPreview()
   hideRampCursorPreview()
   document.getElementById('ramp-creator-panel')?.classList.add('hidden')
-  document.getElementById('btn-add-ramp')?.classList.remove('active')
 }
 
 function updateRampCreatorStatus() {
@@ -3148,6 +3147,16 @@ document.getElementById('tab-maze-arena').addEventListener('click', () => setEdi
 document.getElementById('tab-arena').addEventListener('click', () => setEditorMode('arena'))
 document.getElementById('tab-skybox').addEventListener('click', () => setEditorMode('skybox'))
 
+// --- Collapsible controls area ---
+const controlsArea = document.getElementById('controls-area')
+const controlsAreaToggle = document.getElementById('controls-area-toggle')
+if (controlsArea && controlsAreaToggle) {
+  controlsAreaToggle.addEventListener('click', () => {
+    controlsArea.classList.toggle('collapsed')
+    controlsAreaToggle.setAttribute('aria-expanded', String(!controlsArea.classList.contains('collapsed')))
+  })
+}
+
 // --- Collapsible panels ---
 document.querySelectorAll('.panel-header').forEach((btn) => {
   const panel = btn.closest('.panel')
@@ -3608,11 +3617,68 @@ document.getElementById('directional-light-dir-y').addEventListener('input', app
 document.getElementById('directional-light-dir-z').addEventListener('input', applyDirectionalDirectionFromInputs)
 
 // --- Toolbar ---
-document.getElementById('btn-add-floor')?.addEventListener('click', addFloorBrush)
-document.getElementById('btn-add-wall')?.addEventListener('click', addWallBrush)
-document.getElementById('btn-add-player-start')?.addEventListener('click', addPlayerStartMarker)
-document.getElementById('btn-add-cylinder').addEventListener('click', addCylinderBrush)
-document.getElementById('btn-add-ramp')?.addEventListener('click', startRampCreator)
+const entityPickerOverlay = document.getElementById('entity-picker-overlay')
+const entityPickerTitle = document.getElementById('entity-picker-title')
+let activeEntityPickerGroup = 'object'
+
+function closeEntityPicker() {
+  if (!entityPickerOverlay) return
+  entityPickerOverlay.hidden = true
+}
+
+function addEntityByType(entityType) {
+  switch (entityType) {
+    case 'floor': addFloorBrush(); return
+    case 'wall': addWallBrush(); return
+    case 'cylinder': addCylinderBrush(); return
+    case 'ramp': startRampCreator(); return
+    case 'player_start': addPlayerStartMarker(); return
+    case 'point_light': addPointLight(); return
+    case 'spot_light': addSpotLight(); return
+    case 'directional_light': addDirectionalLight(); return
+    case 'ambient_light': addAmbientLight(); return
+    default: return
+  }
+}
+
+function openEntityPicker(group = 'object') {
+  if (!entityPickerOverlay) return
+  activeEntityPickerGroup = group === 'light' ? 'light' : 'object'
+  entityPickerTitle.textContent = activeEntityPickerGroup === 'light' ? 'Add light' : 'Add object'
+  entityPickerOverlay.querySelectorAll('[data-entity-group]').forEach((option) => {
+    if (!(option instanceof HTMLElement)) return
+    option.hidden = option.dataset.entityGroup !== activeEntityPickerGroup
+  })
+  entityPickerOverlay.hidden = false
+}
+
+document.getElementById('btn-open-object-entity-picker')?.addEventListener('click', () => openEntityPicker('object'))
+document.getElementById('btn-open-light-entity-picker')?.addEventListener('click', () => openEntityPicker('light'))
+entityPickerOverlay?.addEventListener('click', (event) => {
+  if (event.target === entityPickerOverlay) {
+    closeEntityPicker()
+    return
+  }
+  if (!(event.target instanceof HTMLElement)) return
+  const option = event.target.closest('[data-entity-type]')
+  if (option instanceof HTMLElement) {
+    const entityType = option.dataset.entityType
+    if (entityType) {
+      addEntityByType(entityType)
+      closeEntityPicker()
+    }
+    return
+  }
+  if (event.target.closest('.entity-picker-cancel')) {
+    closeEntityPicker()
+  }
+})
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && entityPickerOverlay && !entityPickerOverlay.hidden) {
+    closeEntityPicker()
+  }
+})
+
 document.getElementById('btn-ramp-place')?.addEventListener('click', placeRampFromCreator)
 document.getElementById('btn-ramp-cancel')?.addEventListener('click', cancelRampCreator)
 
@@ -3623,10 +3689,6 @@ document.getElementById('ramp-scale')?.addEventListener('input', (e) => {
   updateRampPreview()
   updateRampCreatorStatus()
 })
-document.getElementById('btn-add-point-light')?.addEventListener('click', addPointLight)
-document.getElementById('btn-add-spot-light')?.addEventListener('click', addSpotLight)
-document.getElementById('btn-add-directional-light')?.addEventListener('click', addDirectionalLight)
-document.getElementById('btn-add-ambient-light')?.addEventListener('click', addAmbientLight)
 document.getElementById('btn-move').addEventListener('click', () => inputHandler.setTransformMode('translate'))
 document.getElementById('btn-rotate').addEventListener('click', () => inputHandler.setTransformMode('rotate'))
 document.getElementById('btn-scale').addEventListener('click', () => inputHandler.setTransformMode('scale'))
