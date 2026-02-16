@@ -207,6 +207,7 @@ export function mountFloorPlanTool(containerElement) {
   let selectedNpcId = null
   let selectedLightId = null
   let dragState = null
+  let isGenerating = false
 
   const preview = document.createElement('section')
   preview.className = 'floor-plan-preview'
@@ -223,13 +224,19 @@ export function mountFloorPlanTool(containerElement) {
   const width = createNumberField('Width (m)', 'fp-width', saved?.width ?? 36, 12, 80)
   const height = createNumberField('Height (m)', 'fp-height', saved?.height ?? 24, 12, 80)
   const hallways = createNumberField('Hallway count', 'fp-hallways', saved?.hallwayCount ?? 1, 1, 4)
-  const hallwayWidth = createRangeField(
-    'Hallway width (cells)',
-    'fp-max-hallway-width',
-    saved?.maxCorridorWidthCells ?? 13,
+  const minCorridorWidthCells = createNumberField(
+    'Corridor min width (cells)',
+    'fp-corridor-min-width',
+    saved?.minCorridorWidthCells ?? 3,
     3,
-    25,
-    1
+    25
+  )
+  const maxCorridorWidthCells = createNumberField(
+    'Corridor max width (cells)',
+    'fp-corridor-max-width',
+    saved?.maxCorridorWidthCells ?? 9,
+    3,
+    25
   )
   const doors = createNumberField('Target rooms', 'fp-doors', saved?.doorCount ?? 6, 1, 24)
   const windows = createNumberField('Max windows', 'fp-windows', saved?.maxWindowCount ?? 8, 0, 24)
@@ -264,7 +271,8 @@ export function mountFloorPlanTool(containerElement) {
     width.row,
     height.row,
     hallways.row,
-    hallwayWidth.row,
+    minCorridorWidthCells.row,
+    maxCorridorWidthCells.row,
     doors.row,
     windows.row,
     lights.row,
@@ -314,7 +322,33 @@ export function mountFloorPlanTool(containerElement) {
   `
   document.body.appendChild(addEntityOverlay)
 
+  const loadingOverlay = (() => {
+    const existing = document.getElementById('floor-plan-loading-overlay')
+    if (existing instanceof HTMLElement) return existing
+    const element = document.createElement('div')
+    element.id = 'floor-plan-loading-overlay'
+    element.className = 'floor-plan-loading-overlay'
+    element.hidden = true
+    element.innerHTML = `
+      <div class="floor-plan-loading-card" role="status" aria-live="polite" aria-label="Generating floor plan">
+        <div class="floor-plan-loading-spinner" aria-hidden="true"></div>
+        <p>Generating floor plan...</p>
+      </div>
+    `
+    document.body.appendChild(element)
+    return element
+  })()
+
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
+
+  function setGeneratingState(generating) {
+    loadingOverlay.hidden = !generating
+    generateBtn.disabled = generating
+    randomizeBtn.disabled = generating
+    saveBtn.disabled = generating
+    addEntityBtn.disabled = generating
+    deleteEntityBtn.disabled = generating
+  }
 
   function persistSettings(statsText) {
     window.localStorage.setItem(
@@ -324,7 +358,8 @@ export function mountFloorPlanTool(containerElement) {
         width: readPositiveInt(width.input, 36),
         height: readPositiveInt(height.input, 24),
         hallwayCount: readPositiveInt(hallways.input, 1),
-        maxCorridorWidthCells: readBoundedInt(hallwayWidth.input, 13, 3, 25),
+        minCorridorWidthCells: readBoundedInt(minCorridorWidthCells.input, 3, 3, 25),
+        maxCorridorWidthCells: readBoundedInt(maxCorridorWidthCells.input, 9, 3, 25),
         doorCount: readPositiveInt(doors.input, 6),
         maxWindowCount: readPositiveInt(windows.input, 8),
         maxLightCount: readBoundedInt(lights.input, 10, 0, 80),
@@ -600,13 +635,16 @@ export function mountFloorPlanTool(containerElement) {
     }
   }
 
-  function generate() {
+  async function generate() {
+    if (isGenerating) return
+    isGenerating = true
     const options = {
       seed: readPositiveInt(seed.input, Date.now()),
       width: readPositiveInt(width.input, 36),
       height: readPositiveInt(height.input, 24),
       hallwayCount: readPositiveInt(hallways.input, 1),
-      maxCorridorWidthCells: readBoundedInt(hallwayWidth.input, 13, 3, 25),
+      minCorridorWidthCells: readBoundedInt(minCorridorWidthCells.input, 3, 3, 25),
+      maxCorridorWidthCells: readBoundedInt(maxCorridorWidthCells.input, 9, 3, 25),
       doorCount: readPositiveInt(doors.input, 6),
       maxWindowCount: readPositiveInt(windows.input, 8),
       maxLightCount: readBoundedInt(lights.input, 10, 0, 80),
@@ -616,6 +654,8 @@ export function mountFloorPlanTool(containerElement) {
     }
     seed.input.value = String(options.seed)
     status.textContent = 'Generating hallway...'
+    setGeneratingState(true)
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
     try {
       const previousViewBoxRaw = (() => {
         const currentSvg = previewContent.querySelector('svg')
@@ -645,7 +685,7 @@ export function mountFloorPlanTool(containerElement) {
       }
       window.localStorage.setItem(LATEST_SVG_KEY, latestSvg)
       const statsText =
-        `Hallways: ${plan.meta.hallwayCount} · Walls: ${plan.walls.length} · ` +
+        `Hallways: ${plan.meta.hallwayCount} · Width: ${plan.meta.corridorWidthCells ?? '-'} cells · Walls: ${plan.walls.length} · ` +
         `Rooms: ${plan.meta.placedDoorCount}/${options.doorCount} · ` +
         `Windows: ${plan.meta.windowCount}/${options.maxWindowCount} · ` +
         `Lights: ${plan.meta.lightCount}/${options.maxLightCount}`
@@ -659,6 +699,9 @@ export function mountFloorPlanTool(containerElement) {
         : 'Hallway generated, but fewer than 2 exterior exits were available.'
     } catch (error) {
       status.textContent = `Could not generate hallway: ${error instanceof Error ? error.message : 'Unknown error'}`
+    } finally {
+      isGenerating = false
+      setGeneratingState(false)
     }
   }
 
