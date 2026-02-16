@@ -43,6 +43,13 @@ export function updateSceneList() {
     return btn
   }
 
+  const makeEmpty = (text) => {
+    const el = document.createElement('div')
+    el.className = 'scene-list-empty'
+    el.textContent = text
+    return el
+  }
+
   const shortId = (id) => (id ? String(id).slice(0, 8) : 'no-id')
 
   const objectList = document.createElement('div')
@@ -50,7 +57,7 @@ export function updateSceneList() {
   const loose = []
 
   _brushes.forEach((mesh) => {
-    if (!mesh || mesh.userData?.isArenaPreview || mesh.userData?.isMazePreview) return
+    if (!mesh) return
     if (!mesh.parent) return
     const groupId = mesh.userData?.generatorGroup
     const subtype = mesh.userData?.subtype
@@ -64,10 +71,9 @@ export function updateSceneList() {
     }
   })
 
-  if (groups.size > 0 || loose.length > 0) {
-    objectList.appendChild(makeLabel('Objects'))
-  }
+  objectList.appendChild(makeLabel('Objects'))
 
+  let objectCountShown = 0
   Array.from(groups.keys()).sort().forEach((groupId) => {
     const items = groups.get(groupId)
     const filtered = items.filter(({ label }) => matches(label))
@@ -75,6 +81,7 @@ export function updateSceneList() {
     if (!showGroup) return
     const itemsToShow = matches(groupId) ? items : filtered
     if (itemsToShow.length === 0) return
+    objectCountShown += itemsToShow.length
     const details = document.createElement('details')
     details.className = 'scene-list-group'
     details.open = searchQuery.length > 0
@@ -95,6 +102,7 @@ export function updateSceneList() {
   })
 
   loose.filter(({ label }) => matches(label)).forEach(({ mesh, label }) => {
+    objectCountShown += 1
     objectList.appendChild(makeButton(label, () => {
       if (_selectLight) _selectLight(null)
       _selectBrush?.(mesh)
@@ -102,20 +110,22 @@ export function updateSceneList() {
     }))
   })
 
+  if (objectCountShown === 0) {
+    objectList.appendChild(makeEmpty(searchQuery ? 'No objects match this search.' : 'No objects in scene.'))
+  }
+
   container.appendChild(objectList)
 
   const lightList = document.createElement('div')
   const allLights = [
-    ...(_baseLightEntries ?? []).filter((entry) => !entry.isDefault),
+    ...(_baseLightEntries ?? []),
     ..._lights.map((entry, idx) => ({
       ...entry,
       label: `${entry.type}_light_${String(idx + 1).padStart(2, '0')}`,
     })),
   ].filter((entry) => entry?.light?.parent)
   const filteredLights = allLights.filter((entry) => matches(entry.label))
-  if (filteredLights.length > 0) {
-    lightList.appendChild(makeLabel('Lights'))
-  }
+  lightList.appendChild(makeLabel('Lights'))
   filteredLights.forEach((entry) => {
     lightList.appendChild(makeButton(entry.label, () => {
       if (_selectBrush) _selectBrush(null)
@@ -123,6 +133,9 @@ export function updateSceneList() {
       _focusCameraOnObject?.(entry.light)
     }))
   })
+  if (filteredLights.length === 0) {
+    lightList.appendChild(makeEmpty(searchQuery ? 'No lights match this search.' : 'No lights in scene.'))
+  }
   container.appendChild(lightList)
 }
 
@@ -131,7 +144,7 @@ export function buildExportEntries() {
   const groups = new Map()
   const loose = []
   _brushes.forEach((mesh) => {
-    if (!mesh || mesh.userData?.isArenaPreview || mesh.userData?.isMazePreview) return
+    if (!mesh || mesh.userData?.isLevelBuilderVolume || mesh.userData?.isArenaPreview || mesh.userData?.isMazePreview) return
     if (!mesh.parent) return
     const groupId = mesh.userData?.generatorGroup
     const subtype = mesh.userData?.subtype

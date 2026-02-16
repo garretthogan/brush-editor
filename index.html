@@ -8,27 +8,30 @@
   </head>
   <body class="tui">
     <div id="app">
-      <div id="header">
-        <div id="mode-tabs">
-          <button id="tab-brush" class="tab active">Object Editor</button>
-          <button id="tab-maze" class="tab">Maze Generator</button>
-          <button id="tab-maze-arena" class="tab">Maze with Arenas</button>
-          <button id="tab-arena" class="tab">Arena Generator</button>
-          <button id="tab-skybox" class="tab">Preview</button>
-        </div>
-        <div id="file-buttons">
-          <button id="btn-save" class="tab" title="Save Level" aria-label="Save level (export GLB)">Save</button>
-          <button id="btn-load" class="tab" title="Load Level / Import GLB" aria-label="Load level from GLB or GLTF file">Load</button>
-        </div>
-      </div>
       <div id="viewport">
-        <div id="pick-debug" class="debug-overlay hidden"></div>
       </div>
-      <div id="controls-area">
-        <button type="button" class="controls-area-header" id="controls-area-toggle" aria-expanded="true" aria-controls="controls-area-content" title="Toggle controls panel" aria-label="Toggle controls panel">
-          <span class="controls-area-chevron">▼</span>
-          Controls
-        </button>
+      <div id="floor-plan-tool-root" class="floor-plan-tool-root hidden"></div>
+      <div id="controls-area" class="collapsed">
+        <div class="controls-area-header-row">
+          <button type="button" class="controls-area-header" id="controls-area-toggle" aria-expanded="false" aria-controls="controls-area-content" title="Toggle controls panel" aria-label="Toggle controls panel">
+            <span class="controls-area-chevron">▼</span>
+            Controls
+          </button>
+          <div id="tools-dropdown" class="tools-dropdown">
+            <select id="tools-select" class="tab" aria-label="Tools">
+              <option value="brush">Object Editor</option>
+              <option value="level-builder">Level Builder</option>
+              <option value="floor-plan">Floor Planner</option>
+              <option value="skybox">Global Illumination</option>
+            </select>
+            <button id="btn-header-add" class="tab" type="button" title="Add entity" aria-label="Add entity">+</button>
+            <button id="btn-header-refresh" class="tab" type="button" title="Generate or iterate selected volume" aria-label="Generate or iterate selected level builder volume">↻</button>
+          </div>
+          <div id="file-buttons">
+            <button id="btn-save" class="tab" title="Save Level" aria-label="Save level (export GLB)">Save</button>
+            <button id="btn-load" class="tab" title="Load Level / Import GLB" aria-label="Load level from GLB or GLTF file">Load</button>
+          </div>
+        </div>
         <div id="controls-area-content" class="controls-area-content">
         <div class="controls-panels">
         <div id="brush-controls" class="mode-panel">
@@ -73,10 +76,26 @@
                 <button id="btn-delete" class="danger" title="Delete Selected" aria-label="Delete selected object (Undo to restore)">Delete</button>
               </div>
               <div class="tool-divider" role="separator"></div>
-              <div class="scene-list">
-                <div class="scene-list-title">Scene Objects</div>
-                <input type="search" id="scene-list-search" placeholder="Search objects..." class="scene-list-search" aria-label="Search scene objects" />
-                <div id="scene-list" class="scene-list-content"></div>
+            </div>
+          </div>
+        </div>
+        <div id="level-builder-controls" class="mode-panel hidden">
+          <div class="panel collapsible">
+            <button class="panel-header" data-panel="level-builder-volumes">
+              <span class="panel-chevron">▼</span>
+              Level Builder
+            </button>
+            <div class="panel-content" id="panel-level-builder-volumes">
+              <div class="add-entity-actions">
+                <button id="btn-open-level-builder-entity-picker" type="button" title="Add level builder volume" aria-label="Open add level builder volume menu">Add</button>
+              </div>
+              <div class="control-row">
+                <label for="level-builder-type">Selected volume type</label>
+                <select id="level-builder-type">
+                  <option value="maze">Maze Generator</option>
+                  <option value="maze-arena">Complex Maze Generator</option>
+                  <option value="arena">Arena Generator</option>
+                </select>
               </div>
             </div>
           </div>
@@ -89,7 +108,7 @@
             </button>
             <div class="panel-content" id="panel-maze-settings">
               <div class="panel-actions">
-                <button id="btn-generate-maze" class="primary">Generate Maze</button>
+                <button id="btn-generate-maze" class="primary">Generate</button>
                 <button id="btn-iterate-maze" type="button">Iterate</button>
               </div>
               <div class="control-row">
@@ -129,7 +148,7 @@
                   Start from center
                 </label>
               </div>
-              <div class="panel collapsible collapsed">
+              <div class="panel collapsible">
                 <button type="button" class="panel-header" data-panel="maze-floor" aria-expanded="false" aria-controls="panel-maze-floor">
                   <span class="panel-chevron">▼</span>
                   Floor options
@@ -142,7 +161,7 @@
                   </div>
                 </div>
               </div>
-              <div class="panel collapsible collapsed">
+              <div class="panel collapsible">
                 <button type="button" class="panel-header" data-panel="maze-advanced" aria-expanded="false" aria-controls="panel-maze-advanced">
                   <span class="panel-chevron">▼</span>
                   Advanced maze options
@@ -172,11 +191,11 @@
           <div class="panel collapsible">
             <button class="panel-header" data-panel="maze-arena-settings">
               <span class="panel-chevron">▼</span>
-              Maze with Arenas
+              Complex Maze
             </button>
             <div class="panel-content" id="panel-maze-arena-settings">
               <div class="panel-actions">
-                <button id="btn-generate-maze-arena" class="primary">Generate Maze with Arenas</button>
+                <button id="btn-generate-maze-arena" class="primary">Generate</button>
                 <button id="btn-iterate-maze-arena" type="button">Iterate</button>
               </div>
               <div class="control-row">
@@ -216,7 +235,7 @@
                 <input type="range" id="maze-arena-height" min="20" max="2000" step="10" value="200" />
                 <span id="maze-arena-height-value">200</span>
               </div>
-              <div class="panel collapsible collapsed">
+              <div class="panel collapsible">
                 <button type="button" class="panel-header" data-panel="maze-arena-arena" aria-expanded="false" aria-controls="panel-maze-arena-arena">
                   <span class="panel-chevron">▼</span>
                   Arena interior options
@@ -245,7 +264,7 @@
             </button>
             <div class="panel-content" id="panel-arena-settings">
               <div class="panel-actions">
-                <button id="btn-generate-arena" class="primary">Generate Arena</button>
+                <button id="btn-generate-arena" class="primary">Generate</button>
                 <button id="btn-iterate-arena" type="button">Iterate</button>
               </div>
               <div class="control-row">
@@ -284,7 +303,7 @@
                 <input type="range" id="arena-density" min="0" max="0.6" step="0.05" value="0.28" />
                 <span id="arena-density-value">0.28</span>
               </div>
-              <div class="panel collapsible collapsed">
+              <div class="panel collapsible">
                 <button type="button" class="panel-header" data-panel="arena-advanced" aria-expanded="false" aria-controls="panel-arena-advanced">
                   <span class="panel-chevron">▼</span>
                   Advanced arena options
@@ -471,6 +490,17 @@
             </div>
           </div>
         </div>
+        <div id="floor-plan-controls" class="mode-panel hidden">
+          <div class="panel collapsible">
+            <button class="panel-header" data-panel="floor-plan-settings">
+              <span class="panel-chevron">▼</span>
+              Floor Plan SVG
+            </button>
+            <div class="panel-content" id="panel-floor-plan-settings">
+              <div id="floor-plan-controls-root" class="floor-plan-controls-root"></div>
+            </div>
+          </div>
+        </div>
         <div class="control-footer">
           <a class="credit-link" href="https://kenney.nl/assets" target="_blank" rel="noopener noreferrer">
             Assets courtesy of Kenney
@@ -478,7 +508,7 @@
         </div>
         </div>
         <div id="camera-controls">
-        <div class="panel collapsible">
+        <div id="camera-controls-panel" class="panel collapsible">
           <button class="panel-header" data-panel="camera-controls">
             <span class="panel-chevron">▼</span>
             Camera
@@ -494,6 +524,36 @@
               <input type="range" id="camera-fly-speed" min="0" max="20" step="0.5" value="6" />
               <span id="camera-fly-speed-value">6</span>
             </div>
+          </div>
+        </div>
+        <div id="scene-list-panel" class="panel collapsible hidden">
+          <button class="panel-header" data-panel="scene-list">
+            <span class="panel-chevron">▼</span>
+            Scene Objects
+          </button>
+          <div class="panel-content" id="panel-scene-list">
+            <div class="scene-list">
+              <input type="search" id="scene-list-search" placeholder="Search objects..." class="scene-list-search" aria-label="Search scene objects" />
+              <div id="scene-list" class="scene-list-content"></div>
+            </div>
+          </div>
+        </div>
+        <div id="floor-plan-entities-panel" class="panel collapsible hidden">
+          <button class="panel-header" data-panel="floor-plan-entities">
+            <span class="panel-chevron">▼</span>
+            Entities
+          </button>
+          <div class="panel-content" id="panel-floor-plan-entities">
+            <div id="floor-plan-entities-root" class="floor-plan-entities-root"></div>
+          </div>
+        </div>
+        <div id="level-builder-entities-panel" class="panel collapsible hidden">
+          <button class="panel-header" data-panel="level-builder-entities">
+            <span class="panel-chevron">▼</span>
+            Generated Entities
+          </button>
+          <div class="panel-content" id="panel-level-builder-entities">
+            <div id="level-builder-entities-root" class="level-builder-entities-root"></div>
           </div>
         </div>
         </div>
@@ -554,6 +614,18 @@
             <button type="button" class="entity-picker-option" data-entity-group="light" data-entity-type="ambient_light" aria-label="Add ambient light">
               <span aria-hidden="true">◌</span>
               <span>Ambient</span>
+            </button>
+            <button type="button" class="entity-picker-option" data-entity-group="level-builder" data-entity-type="level_builder_maze" aria-label="Add maze generator volume">
+              <span aria-hidden="true">▭</span>
+              <span>Maze Volume</span>
+            </button>
+            <button type="button" class="entity-picker-option" data-entity-group="level-builder" data-entity-type="level_builder_maze_arena" aria-label="Add complex maze generator volume">
+              <span aria-hidden="true">◫</span>
+              <span>Complex Maze Volume</span>
+            </button>
+            <button type="button" class="entity-picker-option" data-entity-group="level-builder" data-entity-type="level_builder_arena" aria-label="Add arena generator volume">
+              <span aria-hidden="true">⬚</span>
+              <span>Arena Volume</span>
             </button>
           </div>
           <button type="button" class="entity-picker-cancel">Cancel</button>

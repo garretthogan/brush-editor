@@ -104,20 +104,140 @@
     background: #000; /* your 3D viewport sits here */
     border-bottom: var(--tui-bw) solid var(--tui-line);
   }
-  
-  /* ===== Tabs ===== */
-  body.tui #mode-tabs {
-    display: flex;
+
+  body.tui .floor-plan-tool-root {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    border-bottom: var(--tui-bw) solid var(--tui-line);
+    background: #000000;
+    background-image:
+      linear-gradient(rgba(55, 55, 55, 0.35) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(55, 55, 55, 0.35) 1px, transparent 1px),
+      linear-gradient(rgba(85, 85, 85, 0.45) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(85, 85, 85, 0.45) 1px, transparent 1px);
+    background-size: 24px 24px, 24px 24px, 120px 120px, 120px 120px;
+    background-position: 0 0, 0 0, 0 0, 0 0;
+  }
+  body.tui .floor-plan-controls {
+    display: grid;
+    gap: var(--tui-gap);
+    align-content: start;
+  }
+  body.tui .floor-plan-controls h2 {
+    margin: 0 0 4px;
+    font-size: 1rem;
+  }
+  body.tui .floor-plan-control {
+    display: grid;
     gap: 6px;
+  }
+  body.tui .floor-plan-actions {
+    display: flex;
     flex-wrap: wrap;
+    gap: 6px;
+  }
+  body.tui .floor-plan-status,
+  body.tui .floor-plan-stats {
+    margin: 0;
+    color: var(--tui-muted);
+    font-size: 0.82rem;
+  }
+  body.tui .floor-plan-preview {
+    min-height: calc(100vh - 96px);
+    overflow: auto;
+    border: 2px solid var(--tui-line-strong);
+    padding: var(--tui-pad-1);
+    background: #000000;
+  }
+  body.tui .floor-plan-preview-content {
+    position: relative;
+    min-height: 100%;
+    display: grid;
+    place-items: center;
+    background-color: #000000;
+    background-image:
+      linear-gradient(rgba(51, 51, 51, 0.35) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(51, 51, 51, 0.35) 1px, transparent 1px),
+      linear-gradient(rgba(74, 110, 150, 0.45) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(74, 110, 150, 0.45) 1px, transparent 1px);
+    background-size: 24px 24px, 24px 24px, 120px 120px, 120px 120px;
+  }
+  body.tui .floor-plan-preview-content::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 3;
+    background-image:
+      linear-gradient(rgba(130, 130, 130, 0.14) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(130, 130, 130, 0.14) 1px, transparent 1px),
+      linear-gradient(rgba(175, 175, 175, 0.2) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(175, 175, 175, 0.2) 1px, transparent 1px);
+    background-size: 24px 24px, 24px 24px, 120px 120px, 120px 120px;
+  }
+  body.tui .floor-plan-preview svg {
+    position: relative;
+    z-index: 2;
+    width: 100%;
+    height: auto;
+    background: #000000;
+    display: block;
+    cursor: grab;
+  }
+  body.tui .floor-plan-preview svg .bg {
+    fill: #000000 !important;
+  }
+  body.tui .floor-plan-preview svg.is-panning {
+    cursor: grabbing;
+  }
+  body.tui .floor-plan-entity-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 6px;
+    max-height: 240px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  body.tui .floor-plan-entity-item,
+  body.tui .floor-plan-entity-empty {
+    border: 2px solid var(--tui-line-strong);
+    padding: 6px 8px;
+    font-size: 0.82rem;
+    color: var(--tui-fg);
+  }
+  body.tui .floor-plan-entity-item {
+    width: 100%;
+    text-align: left;
+  }
+  body.tui .floor-plan-entity-item.is-selected {
+    border-color: var(--tui-fg);
+    outline: 2px solid var(--tui-fg);
+    outline-offset: 1px;
+  }
+  body.tui .floor-plan-entity-empty {
+    color: var(--tui-muted);
+  }
+  
+  /* ===== Tools dropdown ===== */
+  body.tui #tools-dropdown {
+    position: relative;
+  }
+  body.tui .controls-area-header-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   
   body.tui #file-buttons {
     display: flex;
     gap: 6px;
+    margin-left: auto;
   }
   
-  body.tui #mode-tabs .tab,
+  body.tui #tools-dropdown .tab,
   body.tui #file-buttons .tab {
     padding: 6px 10px;
     border: 2px solid var(--tui-line-strong);
@@ -126,13 +246,13 @@
     line-height: 1;
   }
   
-  body.tui #mode-tabs .tab:hover,
+  body.tui #tools-dropdown .tab:hover,
   body.tui #file-buttons .tab:hover {
     border-color: var(--tui-cyan);
   }
   
-  body.tui #mode-tabs .tab.active {
-    border-color: var(--tui-pink);
+  body.tui #tools-select {
+    min-width: 180px;
     color: var(--tui-fg);
   }
   
@@ -225,31 +345,36 @@
   
   /* ===== Controls Area / Panels ===== */
   body.tui #controls-area {
-    position: static;
+    position: absolute;
     top: auto;
-    left: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
     max-width: none;
-    z-index: auto;
-    flex: 0 0 auto;
+    z-index: 10;
+    flex: none;
     display: flex;
     flex-direction: column;
     border-top: var(--tui-bw) solid var(--tui-line-strong);
     background: transparent;
   }
   body.tui .controls-area-header {
-    width: 100%;
+    width: auto;
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
     border: 0;
-    background: transparent;
+    background: rgba(255, 255, 255, 0.12);
     color: var(--tui-fg);
     font: inherit;
     cursor: pointer;
     text-align: left;
   }
   body.tui .controls-area-header:hover {
+    background: rgba(255, 255, 255, 0.18);
     color: var(--tui-cyan);
   }
   body.tui .controls-area-header:focus-visible {
@@ -265,7 +390,7 @@
   }
   body.tui .controls-area-content {
     display: grid;
-    grid-template-columns: 360px 1fr;
+    grid-template-columns: minmax(0, 360px) 1fr;
     gap: var(--tui-gap);
     padding: var(--tui-pad-2);
   }
@@ -300,9 +425,12 @@
   body.tui .panel-header:active {
     border-bottom-color: var(--tui-pink);
   }
+  body.tui .panel-header[aria-disabled="true"] {
+    cursor: default;
+  }
   
   body.tui .panel-chevron {
-    color: var(--tui-muted);
+    display: none;
   }
   
   body.tui .panel-content {
@@ -336,17 +464,20 @@
   
   /* Make checkbox labels look terminal-ish */
   body.tui input[type="checkbox"] {
+    appearance: auto;
+    -webkit-appearance: checkbox;
     width: 14px;
     height: 14px;
     border: var(--tui-bw) solid var(--tui-line-strong);
-    background: transparent;
+    background: #000;
+    accent-color: var(--tui-cyan);
     vertical-align: middle;
     margin-right: 8px;
   }
   
   body.tui input[type="checkbox"]:checked {
     border-color: var(--tui-cyan);
-    background: rgba(38, 198, 255, 0.18);
+    background: var(--tui-cyan);
   }
   
   /* ===== Text Inputs / Search / Number ===== */
@@ -456,26 +587,10 @@
   }
   
   body.tui .scene-list-content {
-    max-height: 240px;
+    height: 240px;
     overflow: auto;
     border-top: var(--tui-bw) solid var(--tui-line);
     padding-top: 8px;
-  }
-  
-  /* ===== Debug Overlay ===== */
-  body.tui #pick-debug,
-  body.tui .debug-overlay {
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    right: auto;
-    bottom: auto;
-    border: var(--tui-bw) solid var(--tui-cyan);
-    padding: 8px;
-    background: #000;
-    color: var(--tui-fg);
-    white-space: pre;
-    pointer-events: none;
   }
   
   body.tui .hidden {
@@ -590,6 +705,13 @@
   }
   body.tui .scene-list-item:hover {
     border-color: var(--tui-cyan);
+  }
+  body.tui .scene-list-empty {
+    width: 100%;
+    padding: 6px 8px;
+    border: var(--tui-bw) dashed var(--tui-line-strong);
+    color: var(--tui-muted);
+    background: transparent;
   }
   body.tui .scene-list-group {
     border: var(--tui-bw) solid var(--tui-line);
@@ -711,6 +833,16 @@
     right: auto;
     bottom: auto;
     width: auto;
+    max-height: 40vh;
+    overflow-y: auto;
+    min-height: 0;
+  }
+  body.tui #level-builder-entities-panel {
+    min-height: 0;
+  }
+  body.tui #panel-level-builder-entities {
+    max-height: 220px;
+    overflow-y: auto;
   }
   body.tui .controls-panels {
     display: flex;

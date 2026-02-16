@@ -12,6 +12,7 @@ import { initExportSystem, openExportModal } from './lib/export-glb.js'
 import { createImportSystem } from './lib/import-glb.js'
 import { setState } from './lib/state.js'
 import { showToast } from './lib/toast.js'
+import { mountFloorPlanTool } from './lib/floor-plan-tool.js'
 import {
   TEXTURE_POOL,
   TEXTURE_INDEX,
@@ -58,27 +59,6 @@ const {
   transformControls,
   transformControlsHelper,
 } = initScene({ gridColor: GRID_COLOR })
-
-const pickDebug = document.getElementById('pick-debug')
-function reportPick({ brush, lightEntry, target }) {
-  if (!pickDebug) return
-  const targetLabel = target
-    ? `${target.tagName.toLowerCase()}${target.id ? `#${target.id}` : ''}`
-    : 'none'
-  const brushLabel = brush
-    ? `${brush.userData?.type ?? 'brush'}:${brush.userData?.id ?? 'no-id'}`
-    : 'none'
-  const lightLabel = lightEntry ? `${lightEntry.type}` : 'none'
-  const gizmoLabel = transformControls?.object ? 'attached' : 'detached'
-  const gizmoVisible = transformControlsHelper?.visible ? 'visible' : 'hidden'
-  const gizmoEnabled = transformControls?.enabled ? 'enabled' : 'disabled'
-  pickDebug.textContent =
-    `target: ${targetLabel}\n` +
-    `brush: ${brushLabel}\n` +
-    `light: ${lightLabel}\n` +
-    `gizmo: ${gizmoLabel} / ${gizmoEnabled} / ${gizmoVisible}`
-  pickDebug.classList.remove('hidden')
-}
 
 // Lighting
 const ambient = new THREE.AmbientLight(0x404040, 1)
@@ -149,9 +129,12 @@ let lastArenaState = null
 let lastMazeArenaState = null
 let lastMazePlacement = null
 let lastArenaPlacement = null
+let lastMazeArenaPlacement = null
 let lastMazeBrushes = []
 let lastArenaBrushes = []
 let lastMazeArenaBrushes = []
+let lastLevelBuilderGeneratedBrushes = []
+let lastLevelBuilderGeneratedType = null
 let activeGenerationCollector = null
 let activeGenerationGroup = null
 let mazeGenerationCount = 0
@@ -159,6 +142,57 @@ let arenaGenerationCount = 0
 let lastMazeGroupId = null
 let lastArenaGroupId = null
 let lastMazeArenaGroupId = null
+
+const LEVEL_BUILDER_VOLUME_TYPES = new Set(['maze', 'maze-arena', 'arena'])
+
+function isLevelBuilderVolume(mesh) {
+  return Boolean(mesh?.userData?.isLevelBuilderVolume) && LEVEL_BUILDER_VOLUME_TYPES.has(mesh.userData.levelBuilderType)
+}
+
+function getSelectedLevelBuilderVolume(type = null) {
+  if (!isLevelBuilderVolume(selectedBrush)) return null
+  if (type && selectedBrush.userData.levelBuilderType !== type) return null
+  return selectedBrush
+}
+
+function getLevelBuilderVolumes(type = null) {
+  return brushes.filter((brush) => {
+    if (!isLevelBuilderVolume(brush)) return false
+    return type ? brush.userData.levelBuilderType === type : true
+  })
+}
+
+function getPrimaryLevelBuilderVolume(type) {
+  const selected = getSelectedLevelBuilderVolume(type)
+  if (selected) return selected
+  return getLevelBuilderVolumes(type)[0] ?? null
+}
+
+function removeLevelBuilderVolume(mesh) {
+  if (!isLevelBuilderVolume(mesh)) return
+  const idx = brushes.indexOf(mesh)
+  if (idx !== -1) brushes.splice(idx, 1)
+  if (selectedBrush === mesh) selectBrush(null)
+  removeOutline(mesh)
+  scene.remove(mesh)
+  mesh.geometry?.dispose?.()
+  mesh.material?.dispose?.()
+}
+
+function updateLevelBuilderTypeSelect(type) {
+  const levelBuilderTypeSelect = document.getElementById('level-builder-type')
+  if (!levelBuilderTypeSelect) return
+  if (LEVEL_BUILDER_VOLUME_TYPES.has(type)) levelBuilderTypeSelect.value = type
+}
+
+function getRequestedLevelBuilderType() {
+  const selectedType = getSelectedLevelBuilderVolume()?.userData?.levelBuilderType
+  if (selectedType && LEVEL_BUILDER_VOLUME_TYPES.has(selectedType)) return selectedType
+  const levelBuilderTypeSelect = document.getElementById('level-builder-type')
+  const requestedType = levelBuilderTypeSelect?.value
+  if (requestedType && LEVEL_BUILDER_VOLUME_TYPES.has(requestedType)) return requestedType
+  return 'maze'
+}
 
 
 function beginGenerationCollector() {
@@ -173,6 +207,20 @@ function endGenerationCollector() {
   return collected
 }
 
+function shortId(id) {
+  return String(id ?? '').slice(0, 8) || 'no-id'
+}
+
+function setLastLevelBuilderGeneratedEntities(type, brushesList) {
+  lastLevelBuilderGeneratedType = type
+  lastLevelBuilderGeneratedBrushes = Array.isArray(brushesList) ? [...brushesList] : []
+  renderLevelBuilderEntitiesList()
+}
+
+function getLastLevelBuilderGeneratedEntities() {
+  return lastLevelBuilderGeneratedBrushes.filter((mesh) => mesh?.parent && brushes.includes(mesh))
+}
+
 function updateIterateButtons() {
   const mazeBtn = document.getElementById('btn-iterate-maze')
   if (mazeBtn) mazeBtn.disabled = !lastMazeState
@@ -185,26 +233,21 @@ function updateIterateButtons() {
 
 function updateMazePreviewVisibility() {
   const checkbox = document.getElementById('maze-preview-visible')
-  const shouldShow = checkbox?.checked ?? true
-  if (shouldShow) {
-    const preview = ensureMazePreview()
-    preview.visible = true
-  } else if (mazePreview) {
-    mazePreview.visible = false
-    if (selectedBrush === mazePreview) selectBrush(null)
-  }
+  if (checkbox) checkbox.checked = true
+  getLevelBuilderVolumes('maze').forEach((mesh) => {
+    mesh.visible = true
+  })
+  getLevelBuilderVolumes('maze-arena').forEach((mesh) => {
+    mesh.visible = true
+  })
 }
 
 function updateArenaPreviewVisibility() {
   const checkbox = document.getElementById('arena-preview-visible')
-  const shouldShow = checkbox?.checked ?? true
-  if (shouldShow) {
-    const preview = ensureArenaPreview()
-    preview.visible = true
-  } else if (arenaPreview) {
-    arenaPreview.visible = false
-    if (selectedBrush === arenaPreview) selectBrush(null)
-  }
+  if (checkbox) checkbox.checked = true
+  getLevelBuilderVolumes('arena').forEach((mesh) => {
+    mesh.visible = true
+  })
 }
 
 // --- Light State ---
@@ -1034,6 +1077,7 @@ function selectLight(entry) {
     transformControlsHelper.visible = false
   }
   updateLightControls()
+  renderLevelBuilderEntitiesList()
 }
 
 function focusCameraOnObject(object) {
@@ -1626,7 +1670,11 @@ function removeGeneratedBrushes(list) {
   const nextBrushes = brushes.filter((m) => !toRemove.has(m))
   brushes.length = 0
   brushes.push(...nextBrushes)
+  if (lastLevelBuilderGeneratedBrushes.length > 0) {
+    lastLevelBuilderGeneratedBrushes = lastLevelBuilderGeneratedBrushes.filter((mesh) => brushes.includes(mesh))
+  }
   if (selectedBrush && !brushes.includes(selectedBrush)) selectBrush(null)
+  renderLevelBuilderEntitiesList()
 }
 
 function cloneGrid(grid) {
@@ -1662,8 +1710,17 @@ function gridsEqual(a, b) {
 }
 
 function generateMaze() {
+  const preview = getSelectedLevelBuilderVolume('maze')
+  if (!preview) {
+    showToast('Select a Maze volume in Level Builder, then generate.', { type: 'warn' })
+    return
+  }
   pushUndoState()
-  if (!updateMazePreviewValidity()) return
+  if (!isPreviewValid(preview, null)) {
+    updatePreviewValidity(preview, null)
+    showToast('Maze volume intersects another object. Move or resize it, then try again.', { type: 'warn' })
+    return
+  }
 
   mazeGenerationCount += 1
   lastMazeGroupId = `maze_${String(mazeGenerationCount).padStart(2, '0')}`
@@ -1693,8 +1750,6 @@ function generateMaze() {
   }
   const { grid, cols, rows } = mazeResult
 
-  updateMazePreviewFromControls()
-  const preview = ensureMazePreview()
   const baseOffset = getPreviewBaseOffset(preview, ctrl.wallHeight)
   const baseRotation = preview?.rotation ? preview.rotation.clone() : null
   beginGenerationCollector()
@@ -1711,6 +1766,7 @@ function generateMaze() {
     baseRotation
   )
   lastMazeBrushes = endGenerationCollector()
+  setLastLevelBuilderGeneratedEntities('maze', lastMazeBrushes)
 
   lastMazeState = {
     grid: cloneGrid(grid),
@@ -1722,9 +1778,7 @@ function generateMaze() {
     rotation: baseRotation ? baseRotation.clone() : null,
   }
   updateIterateButtons()
-  const mazePreviewCheckbox = document.getElementById('maze-preview-visible')
-  if (mazePreviewCheckbox) mazePreviewCheckbox.checked = false
-  if (mazePreview) mazePreview.visible = false
+  removeLevelBuilderVolume(preview)
 
   selectBrush(null)
   updateSceneList()
@@ -1762,7 +1816,7 @@ function addArenaCover(size, position) {
   return mesh
 }
 
-function createArenaPreviewMesh(size, position) {
+function createLevelBuilderVolumeMesh(size, position, levelBuilderType) {
   const geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
   const material = new THREE.MeshBasicMaterial({
     color: 0xff3333,
@@ -1776,28 +1830,33 @@ function createArenaPreviewMesh(size, position) {
   mesh.receiveShadow = false
   mesh.userData.isBrush = true
   mesh.userData.isUserBrush = true
-  mesh.userData.isArenaPreview = true
-  mesh.userData.type = 'arena-preview'
+  mesh.userData.isLevelBuilderVolume = true
+  mesh.userData.levelBuilderType = levelBuilderType
+  mesh.userData.type = 'level-builder-volume'
+  mesh.userData.subtype = `${levelBuilderType}-volume`
   mesh.userData.size = [...size]
+  mesh.userData.id = crypto.randomUUID()
+  mesh.name = `${levelBuilderType}_volume_${String(mesh.userData.id).slice(0, 8)}`
   return mesh
 }
 
-function ensureArenaPreview() {
-  if (arenaPreview && brushes.includes(arenaPreview)) return arenaPreview
+function addArenaVolume() {
   const ctrl = getArenaControls()
   const totalHeight = ctrl.wallHeight
   const size = [ctrl.cols * ctrl.tileSize, totalHeight, ctrl.rows * ctrl.tileSize]
   const position = [0, totalHeight / 2, 0]
-  arenaPreview = createArenaPreviewMesh(size, position)
-  arenaPreview.userData.id = crypto.randomUUID()
-  arenaPreview.userData.arenaCols = ctrl.cols
-  arenaPreview.userData.arenaRows = ctrl.rows
-  scene.add(arenaPreview)
-  brushes.push(arenaPreview)
-  return arenaPreview
+  const mesh = createLevelBuilderVolumeMesh(size, position, 'arena')
+  mesh.userData.arenaCols = ctrl.cols
+  mesh.userData.arenaRows = ctrl.rows
+  scene.add(mesh)
+  brushes.push(mesh)
+  arenaPreview = mesh
+  return mesh
 }
 
 function updateArenaPreviewFromControls() {
+  const preview = getPrimaryLevelBuilderVolume('arena')
+  if (!preview) return
   const ctrl = getArenaControls()
   const obstacleInput = document.getElementById('arena-obstacle-height')
   const obstacleValue = document.getElementById('arena-obstacle-height-value')
@@ -1816,7 +1875,6 @@ function updateArenaPreviewFromControls() {
   lastArenaWallHeightCm = ctrl.wallHeightCm
   const totalHeight = ctrl.wallHeight
   const size = [ctrl.cols * ctrl.tileSize, totalHeight, ctrl.rows * ctrl.tileSize]
-  const preview = ensureArenaPreview()
   preview.geometry.dispose()
   preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
   preview.userData.size = [...size]
@@ -1828,28 +1886,7 @@ function updateArenaPreviewFromControls() {
   }
 }
 
-function createMazePreviewMesh(size, position) {
-  const geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
-  const material = new THREE.MeshBasicMaterial({
-    color: 0xff3333,
-    transparent: true,
-    opacity: 0.25,
-    depthWrite: false,
-  })
-  const mesh = new THREE.Mesh(geometry, material)
-  mesh.position.set(...position)
-  mesh.castShadow = false
-  mesh.receiveShadow = false
-  mesh.userData.isBrush = true
-  mesh.userData.isUserBrush = true
-  mesh.userData.isMazePreview = true
-  mesh.userData.type = 'maze-preview'
-  mesh.userData.size = [...size]
-  return mesh
-}
-
-function ensureMazePreview() {
-  if (mazePreview && brushes.includes(mazePreview)) return mazePreview
+function addMazeVolume() {
   const ctrl = getMazeControls()
   const w = ctrl.cols * 2 + 1
   const h = ctrl.rows * 2 + 1
@@ -1857,16 +1894,16 @@ function ensureMazePreview() {
   const depth = (h - 1) * ctrl.spaceBetweenWalls
   const size = [width, ctrl.wallHeight, depth]
   const position = [0, ctrl.wallHeight / 2, 0]
-  mazePreview = createMazePreviewMesh(size, position)
-  mazePreview.userData.id = crypto.randomUUID()
-  mazePreview.userData.mazeCols = ctrl.cols
-  mazePreview.userData.mazeRows = ctrl.rows
-  scene.add(mazePreview)
-  brushes.push(mazePreview)
-  return mazePreview
+  const mesh = createLevelBuilderVolumeMesh(size, position, 'maze')
+  mesh.userData.mazeCols = ctrl.cols
+  mesh.userData.mazeRows = ctrl.rows
+  scene.add(mesh)
+  brushes.push(mesh)
+  mazePreview = mesh
+  return mesh
 }
 
-function ensureMazeArenaPreview() {
+function addMazeArenaVolume() {
   const ctrl = getMazeArenaControls()
   const w = ctrl.cols * 2 + 1
   const h = ctrl.rows * 2 + 1
@@ -1874,36 +1911,49 @@ function ensureMazeArenaPreview() {
   const depth = (h - 1) * ctrl.spaceBetweenWalls
   const size = [width, ctrl.wallHeight, depth]
   const position = [0, ctrl.wallHeight / 2, 0]
-  if (!mazePreview || !brushes.includes(mazePreview)) {
-    mazePreview = createMazePreviewMesh(size, position)
-    mazePreview.userData.id = crypto.randomUUID()
-    mazePreview.userData.isMazePreview = true
-    scene.add(mazePreview)
-    brushes.push(mazePreview)
-  }
-  mazePreview.geometry.dispose()
-  mazePreview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
-  mazePreview.userData.size = [...size]
-  mazePreview.userData.mazeCols = ctrl.cols
-  mazePreview.userData.mazeRows = ctrl.rows
-  mazePreview.position.set(...position)
-  refreshOutline(mazePreview)
-  return mazePreview
+  const mesh = createLevelBuilderVolumeMesh(size, position, 'maze-arena')
+  mesh.userData.mazeArenaCols = ctrl.cols
+  mesh.userData.mazeArenaRows = ctrl.rows
+  scene.add(mesh)
+  brushes.push(mesh)
+  mazePreview = mesh
+  return mesh
 }
 
 function updateMazePreviewFromControls() {
+  const preview = getPrimaryLevelBuilderVolume('maze')
+  if (!preview) return
   const ctrl = getMazeControls()
   const w = ctrl.cols * 2 + 1
   const h = ctrl.rows * 2 + 1
   const width = (w - 1) * ctrl.spaceBetweenWalls
   const depth = (h - 1) * ctrl.spaceBetweenWalls
   const size = [width, ctrl.wallHeight, depth]
-  const preview = ensureMazePreview()
   preview.geometry.dispose()
   preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
   preview.userData.size = [...size]
   preview.userData.mazeCols = ctrl.cols
   preview.userData.mazeRows = ctrl.rows
+  refreshOutline(preview)
+  if (!preview.position || Number.isNaN(preview.position.y)) {
+    preview.position.set(0, ctrl.wallHeight / 2, 0)
+  }
+}
+
+function updateMazeArenaPreviewFromControls() {
+  const preview = getPrimaryLevelBuilderVolume('maze-arena')
+  if (!preview) return
+  const ctrl = getMazeArenaControls()
+  const w = ctrl.cols * 2 + 1
+  const h = ctrl.rows * 2 + 1
+  const width = (w - 1) * ctrl.spaceBetweenWalls
+  const depth = (h - 1) * ctrl.spaceBetweenWalls
+  const size = [width, ctrl.wallHeight, depth]
+  preview.geometry.dispose()
+  preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
+  preview.userData.size = [...size]
+  preview.userData.mazeArenaCols = ctrl.cols
+  preview.userData.mazeArenaRows = ctrl.rows
   refreshOutline(preview)
   if (!preview.position || Number.isNaN(preview.position.y)) {
     preview.position.set(0, ctrl.wallHeight / 2, 0)
@@ -1942,11 +1992,24 @@ function updatePreviewValidity(preview, otherPreview, ignoreGenerator = null) {
 }
 
 function updateArenaPreviewValidity() {
-  return updatePreviewValidity(arenaPreview, mazePreview)
+  const previews = getLevelBuilderVolumes('arena').filter((mesh) => mesh.visible)
+  let allValid = previews.length > 0
+  previews.forEach((preview) => {
+    allValid = updatePreviewValidity(preview, null) && allValid
+  })
+  return allValid
 }
 
 function updateMazePreviewValidity() {
-  return updatePreviewValidity(mazePreview, arenaPreview)
+  const previews = [
+    ...getLevelBuilderVolumes('maze').filter((mesh) => mesh.visible),
+    ...getLevelBuilderVolumes('maze-arena').filter((mesh) => mesh.visible),
+  ]
+  let allValid = previews.length > 0
+  previews.forEach((preview) => {
+    allValid = updatePreviewValidity(preview, null) && allValid
+  })
+  return allValid
 }
 
 function snapScaledCount(count, scale, min, max) {
@@ -2068,6 +2131,60 @@ function syncMazeControlsFromPreview(preview, scale) {
   preview.position.set(baseOffset[0], baseOffset[1] + nextWallHeightUnits / 2, baseOffset[2])
 }
 
+function syncMazeArenaControlsFromPreview(preview, scale) {
+  if (!preview) return
+  const spaceBetweenWallsCm = parseFloat(document.getElementById('maze-arena-space')?.value ?? '100')
+  if (!spaceBetweenWallsCm || Number.isNaN(spaceBetweenWallsCm)) return
+  const spaceBetweenWalls = spaceBetweenWallsCm / CM_PER_UNIT
+  const wallHeightInput = document.getElementById('maze-arena-height')
+  const wallHeightValueEl = document.getElementById('maze-arena-height-value')
+  const wallHeightCm = parseFloat(wallHeightInput?.value ?? '100')
+  const wallHeightUnits = preview.userData.size?.[1] ?? wallHeightCm / CM_PER_UNIT
+  const scaledHeightUnits = wallHeightUnits * scale.y
+  const baseOffset = getPreviewBaseOffset(preview, scaledHeightUnits)
+  const colsEl = document.getElementById('maze-arena-cols')
+  const rowsEl = document.getElementById('maze-arena-rows')
+  const colsValueEl = document.getElementById('maze-arena-cols-value')
+  const rowsValueEl = document.getElementById('maze-arena-rows-value')
+  if (!colsEl || !rowsEl) return
+  const minCols = parseInt(colsEl.min ?? '1', 10)
+  const maxCols = parseInt(colsEl.max ?? '999', 10)
+  const minRows = parseInt(rowsEl.min ?? '1', 10)
+  const maxRows = parseInt(rowsEl.max ?? '999', 10)
+  const baseCols = preview.userData.mazeArenaCols ?? parseInt(colsEl.value, 10) ?? 1
+  const baseRows = preview.userData.mazeArenaRows ?? parseInt(rowsEl.value, 10) ?? 1
+  const nextCols = snapScaledCount(baseCols, scale.x, minCols, maxCols)
+  const nextRows = snapScaledCount(baseRows, scale.z, minRows, maxRows)
+  colsEl.value = String(nextCols)
+  rowsEl.value = String(nextRows)
+  if (colsValueEl) colsValueEl.textContent = String(nextCols)
+  if (rowsValueEl) rowsValueEl.textContent = String(nextRows)
+  let nextWallHeightCm = wallHeightCm
+  if (wallHeightInput) {
+    const minHeightCm = parseFloat(wallHeightInput.min ?? '0')
+    const maxHeightCm = parseFloat(wallHeightInput.max ?? '999')
+    const baseHeightUnits = preview.userData.size?.[1] ?? wallHeightCm / CM_PER_UNIT
+    const nextWallHeightUnits = clamp(baseHeightUnits * scale.y, minHeightCm / CM_PER_UNIT, maxHeightCm / CM_PER_UNIT)
+    nextWallHeightCm = Math.round(nextWallHeightUnits * CM_PER_UNIT)
+    nextWallHeightCm = clamp(nextWallHeightCm, minHeightCm, maxHeightCm)
+    wallHeightInput.value = String(nextWallHeightCm)
+    if (wallHeightValueEl) wallHeightValueEl.textContent = String(nextWallHeightCm)
+  }
+  const nextWallHeightUnits = nextWallHeightCm / CM_PER_UNIT
+  const w = nextCols * 2 + 1
+  const h = nextRows * 2 + 1
+  const width = (w - 1) * spaceBetweenWalls
+  const depth = (h - 1) * spaceBetweenWalls
+  const size = [width, nextWallHeightUnits, depth]
+  preview.geometry.dispose()
+  preview.geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
+  preview.userData.size = [...size]
+  preview.userData.mazeArenaCols = nextCols
+  preview.userData.mazeArenaRows = nextRows
+  refreshOutline(preview)
+  preview.position.set(baseOffset[0], baseOffset[1] + nextWallHeightUnits / 2, baseOffset[2])
+}
+
 function addArenaFloors(cols, rows, tileSize, storeyHeight, offset = [0, 0, 0], rotation = null) {
   const thickness = Math.max(0.1, tileSize * 0.1)
   const ox = ((cols - 1) / 2) * tileSize
@@ -2165,8 +2282,17 @@ function placeArenaMarkers(arena, tileSize, wallHeight, obstacleHeight, offset =
 }
 
 function generateArena() {
+  const preview = getSelectedLevelBuilderVolume('arena')
+  if (!preview) {
+    showToast('Select an Arena volume in Level Builder, then generate.', { type: 'warn' })
+    return
+  }
   pushUndoState()
-  if (!updateArenaPreviewValidity()) return
+  if (!isPreviewValid(preview, null)) {
+    updatePreviewValidity(preview, null)
+    showToast('Arena volume intersects another object. Move or resize it, then try again.', { type: 'warn' })
+    return
+  }
 
   removeGeneratedBrushes(lastArenaBrushes)
 
@@ -2201,7 +2327,6 @@ function generateArena() {
     }
   }
 
-  const preview = ensureArenaPreview()
   const totalHeight = ctrl.wallHeight
   const baseOffset = getPreviewBaseOffset(preview, totalHeight)
   const baseRotation = preview?.rotation ? preview.rotation.clone() : null
@@ -2217,6 +2342,7 @@ function generateArena() {
   arenaGridsToMeshes(arena.grids, ctrl.tileSize, ctrl.wallHeight, baseOffset, baseRotation)
   placeArenaMarkers(arena, ctrl.tileSize, ctrl.wallHeight, ctrl.obstacleHeight, baseOffset, baseRotation)
   lastArenaBrushes = endGenerationCollector()
+  setLastLevelBuilderGeneratedEntities('arena', lastArenaBrushes)
 
   lastArenaState = cloneArenaState(arena)
   lastArenaPlacement = {
@@ -2224,9 +2350,7 @@ function generateArena() {
     rotation: baseRotation ? baseRotation.clone() : null,
   }
   updateIterateButtons()
-  const arenaPreviewCheckbox = document.getElementById('arena-preview-visible')
-  if (arenaPreviewCheckbox) arenaPreviewCheckbox.checked = false
-  if (arenaPreview) arenaPreview.visible = false
+  removeLevelBuilderVolume(preview)
 
   selectBrush(null)
   updateSceneList()
@@ -2276,6 +2400,7 @@ function regenerateMazeFromLast() {
     baseRotation
   )
   lastMazeBrushes = endGenerationCollector()
+  setLastLevelBuilderGeneratedEntities('maze', lastMazeBrushes)
 
   lastMazeState = {
     grid: cloneGrid(grid),
@@ -2342,6 +2467,7 @@ function regenerateArenaFromLast() {
     baseRotation
   )
   lastArenaBrushes = endGenerationCollector()
+  setLastLevelBuilderGeneratedEntities('arena', lastArenaBrushes)
 
   lastArenaState = cloneArenaState(arena)
   updateIterateButtons()
@@ -2353,7 +2479,17 @@ function regenerateArenaFromLast() {
 let mazeArenaGenerationCount = 0
 
 function generateMazeArena() {
+  const preview = getSelectedLevelBuilderVolume('maze-arena')
+  if (!preview) {
+    showToast('Select a Complex Maze volume in Level Builder, then generate.', { type: 'warn' })
+    return
+  }
   pushUndoState()
+  if (!isPreviewValid(preview, null)) {
+    updatePreviewValidity(preview, null)
+    showToast('Complex Maze volume intersects another object. Move or resize it, then try again.', { type: 'warn' })
+    return
+  }
   removeGeneratedBrushes(lastMazeArenaBrushes)
 
   mazeArenaGenerationCount += 1
@@ -2382,7 +2518,6 @@ function generateMazeArena() {
     return
   }
 
-  const preview = ensureMazeArenaPreview()
   const baseOffset = getPreviewBaseOffset(preview, ctrl.wallHeight)
   const baseRotation = preview?.rotation ? preview.rotation.clone() : null
 
@@ -2444,17 +2579,19 @@ function generateMazeArena() {
   }
 
   lastMazeArenaBrushes = endGenerationCollector()
+  setLastLevelBuilderGeneratedEntities('maze-arena', lastMazeArenaBrushes)
   lastMazeArenaState = {
     grid: cloneGrid(grid),
     cols,
     rows,
     rooms: rooms.map((r) => ({ ...r })),
   }
+  lastMazeArenaPlacement = {
+    offset: [...baseOffset],
+    rotation: baseRotation ? baseRotation.clone() : null,
+  }
   updateIterateButtons()
-
-  const checkbox = document.getElementById('maze-arena-preview-visible')
-  if (checkbox) checkbox.checked = false
-  if (mazePreview) mazePreview.visible = false
+  removeLevelBuilderVolume(preview)
 
   selectBrush(null)
   updateSceneList()
@@ -2462,6 +2599,30 @@ function generateMazeArena() {
 
 function regenerateMazeArenaFromLast() {
   if (!lastMazeArenaState) return
+  const ctrl = getMazeArenaControls()
+  let volume = getSelectedLevelBuilderVolume('maze-arena')
+  if (!volume) {
+    const placementOffset = lastMazeArenaPlacement?.offset ?? [0, 0, 0]
+    const placementRotation = lastMazeArenaPlacement?.rotation ? lastMazeArenaPlacement.rotation.clone() : null
+    const w = ctrl.cols * 2 + 1
+    const h = ctrl.rows * 2 + 1
+    const width = (w - 1) * ctrl.spaceBetweenWalls
+    const depth = (h - 1) * ctrl.spaceBetweenWalls
+    const size = [width, ctrl.wallHeight, depth]
+    const position = [
+      placementOffset[0],
+      placementOffset[1] + ctrl.wallHeight / 2,
+      placementOffset[2],
+    ]
+    volume = createLevelBuilderVolumeMesh(size, position, 'maze-arena')
+    volume.userData.mazeArenaCols = ctrl.cols
+    volume.userData.mazeArenaRows = ctrl.rows
+    if (placementRotation) volume.rotation.copy(placementRotation)
+    scene.add(volume)
+    brushes.push(volume)
+    updateSceneList()
+  }
+  selectBrush(volume)
   generateMazeArena()
 }
 
@@ -2543,11 +2704,22 @@ function selectBrush(mesh) {
     transformControls.enabled = true
     transformControls.attach(mesh)
     transformControlsHelper.visible = true
+    if (isLevelBuilderVolume(mesh)) {
+      updateLevelBuilderTypeSelect(mesh.userData.levelBuilderType)
+      if (editorMode !== 'level-builder') setEditorMode('level-builder')
+      updateLevelBuilderControlPanels()
+      if (mesh.userData.levelBuilderType === 'arena') updateArenaPreviewFromControls()
+      if (mesh.userData.levelBuilderType === 'maze') updateMazePreviewFromControls()
+      if (mesh.userData.levelBuilderType === 'maze-arena') updateMazeArenaPreviewFromControls()
+    }
   } else {
     transformControls.detach()
     transformControls.enabled = false
     transformControlsHelper.visible = false
+    if (editorMode === 'level-builder') updateLevelBuilderControlPanels()
   }
+  renderLevelBuilderEntitiesList()
+  updateHeaderRefreshButtonState()
 }
 
 function cloneBrush(mesh) {
@@ -2562,6 +2734,21 @@ function cloneBrush(mesh) {
       brushes.length * 4,
       { key: mesh.userData.textureKey, index: mesh.userData.textureIndex }
     )
+  } else if (isLevelBuilderVolume(mesh)) {
+    clone = createLevelBuilderVolumeMesh(
+      [...(mesh.userData.size ?? [1, 1, 1])],
+      position,
+      mesh.userData.levelBuilderType
+    )
+    clone.userData = {
+      ...clone.userData,
+      arenaCols: mesh.userData.arenaCols,
+      arenaRows: mesh.userData.arenaRows,
+      mazeCols: mesh.userData.mazeCols,
+      mazeRows: mesh.userData.mazeRows,
+      mazeArenaCols: mesh.userData.mazeArenaCols,
+      mazeArenaRows: mesh.userData.mazeArenaRows,
+    }
   } else if (mesh.userData.type === 'ramp' && mesh.userData.rampPoints) {
     clone = addRampBrushFrom4Points(
       mesh.userData.rampPoints[0],
@@ -2600,7 +2787,13 @@ function cloneBrush(mesh) {
 
 function deleteSelected() {
   if (!selectedBrush) return
-  if (selectedBrush.userData?.isArenaPreview || selectedBrush.userData?.isMazePreview) return
+  if (isLevelBuilderVolume(selectedBrush)) {
+    const meshToDelete = selectedBrush
+    removeLevelBuilderVolume(meshToDelete)
+    updateSceneList()
+    showToast('Level Builder volume removed.')
+    return
+  }
   pushUndoState()
   const idx = brushes.indexOf(selectedBrush)
   if (idx !== -1) brushes.splice(idx, 1)
@@ -2636,14 +2829,6 @@ function findBrushFromObject(obj) {
 
 function isBrushSelectable(brush) {
   if (!brush || !brush.visible) return false
-  if (brush.userData?.isMazePreview) {
-    const checkbox = document.getElementById('maze-preview-visible')
-    if (checkbox && !checkbox.checked) return false
-  }
-  if (brush.userData?.isArenaPreview) {
-    const checkbox = document.getElementById('arena-preview-visible')
-    if (checkbox && !checkbox.checked) return false
-  }
   return true
 }
 
@@ -2709,14 +2894,20 @@ function bakeScaleIntoGeometry(mesh) {
   const s = mesh.scale
   const outline = mesh.userData.outline
 
-  if (mesh.userData.isArenaPreview) {
+  if (mesh.userData.isLevelBuilderVolume && mesh.userData.levelBuilderType === 'arena') {
     syncArenaControlsFromPreview(mesh, s)
     mesh.scale.set(1, 1, 1)
     if (outline) refreshOutline(mesh)
     return
   }
-  if (mesh.userData.isMazePreview) {
+  if (mesh.userData.isLevelBuilderVolume && mesh.userData.levelBuilderType === 'maze') {
     syncMazeControlsFromPreview(mesh, s)
+    mesh.scale.set(1, 1, 1)
+    if (outline) refreshOutline(mesh)
+    return
+  }
+  if (mesh.userData.isLevelBuilderVolume && mesh.userData.levelBuilderType === 'maze-arena') {
+    syncMazeArenaControlsFromPreview(mesh, s)
     mesh.scale.set(1, 1, 1)
     if (outline) refreshOutline(mesh)
     return
@@ -2849,7 +3040,7 @@ function serializeLevel() {
   return {
     version: 2,
     brushes: brushes
-      .filter((m) => m.userData.type !== 'imported' && !m.userData.isArenaPreview && !m.userData.isMazePreview)
+      .filter((m) => m.userData.type !== 'imported' && !m.userData.isLevelBuilderVolume && !m.userData.isArenaPreview && !m.userData.isMazePreview)
       .map((m) => {
       const base = {
         id: m.userData.id,
@@ -3038,6 +3229,15 @@ function deserializeLevel(data) {
 }
 
 async function saveLevel() {
+  if (editorMode === 'floor-plan') {
+    const saveSvgButton = document.getElementById('fp-save-svg')
+    if (saveSvgButton instanceof HTMLButtonElement) {
+      saveSvgButton.click()
+      return
+    }
+    showToast('Floor plan tool is still loading. Try Save again in a moment.', { type: 'warn' })
+    return
+  }
   openExportModal()
 }
 
@@ -3055,13 +3255,28 @@ const { addImportedMeshes, loadLevelFromFile } = createImportSystem({
   showToast,
 })
 
-// --- Mode tabs ---
+// --- Mode selector ---
 let editorMode = 'brush'
 const brushControls = document.getElementById('brush-controls')
+const levelBuilderControls = document.getElementById('level-builder-controls')
 const mazeControls = document.getElementById('maze-controls')
 const mazeArenaControls = document.getElementById('maze-arena-controls')
 const arenaControls = document.getElementById('arena-controls')
 const skyboxControls = document.getElementById('skybox-controls')
+const floorPlanControls = document.getElementById('floor-plan-controls')
+const toolsSelect = document.getElementById('tools-select')
+const headerAddButton = document.getElementById('btn-header-add')
+const headerRefreshButton = document.getElementById('btn-header-refresh')
+const floorPlanToolRoot = document.getElementById('floor-plan-tool-root')
+const fileButtons = document.getElementById('file-buttons')
+const floorPlanControlsRoot = document.getElementById('floor-plan-controls-root')
+const floorPlanEntitiesRoot = document.getElementById('floor-plan-entities-root')
+const cameraControlsPanel = document.getElementById('camera-controls-panel')
+const sceneListPanel = document.getElementById('scene-list-panel')
+const floorPlanEntitiesPanel = document.getElementById('floor-plan-entities-panel')
+const levelBuilderEntitiesPanel = document.getElementById('level-builder-entities-panel')
+const levelBuilderEntitiesRoot = document.getElementById('level-builder-entities-root')
+let floorPlanToolMounted = false
 
 function applySkyParams() {
   const turbidity = parseFloat(document.getElementById('sky-turbidity').value)
@@ -3093,59 +3308,234 @@ function applySkyParams() {
   renderer.toneMappingExposure = exposure
 }
 
-function setEditorMode(mode) {
-  editorMode = mode
-  if (rampCreatorState.active) cancelRampCreator()
-  document.querySelectorAll('#mode-tabs .tab').forEach((t) => t.classList.remove('active'))
-  document.getElementById(`tab-${mode}`)?.classList.add('active')
-  brushControls.classList.toggle('hidden', mode !== 'brush')
-  mazeControls.classList.toggle('hidden', mode !== 'maze')
-  mazeArenaControls.classList.toggle('hidden', mode !== 'maze-arena')
-  arenaControls.classList.toggle('hidden', mode !== 'arena')
-  skyboxControls.classList.toggle('hidden', mode !== 'skybox')
-  sky.visible = mode === 'skybox'
-  useLitMaterials = mode === 'skybox'
-  updateBrushMaterials(useLitMaterials)
-  updateShadowState(mode === 'skybox')
-  if (mode === 'arena') {
-    updateArenaPreviewFromControls()
-    updateArenaPreviewValidity()
-    updateArenaPreviewVisibility()
-    if (mazePreview) mazePreview.visible = false
-    setCurrentTool('translate')
-    setTransformMode('translate')
-  } else if (mode === 'maze') {
-    updateMazePreviewFromControls()
-    updateMazePreviewValidity()
-    updateMazePreviewVisibility()
-    if (arenaPreview) arenaPreview.visible = false
-    setCurrentTool('translate')
-    setTransformMode('translate')
-  } else if (mode === 'maze-arena') {
-    ensureMazeArenaPreview()
-    updateMazePreviewValidity()
-    const checkbox = document.getElementById('maze-arena-preview-visible')
-    if (mazePreview) mazePreview.visible = checkbox?.checked ?? true
-    if (arenaPreview) arenaPreview.visible = false
-    setCurrentTool('translate')
-    setTransformMode('translate')
+function updateLevelBuilderControlPanels() {
+  const isLevelBuilderMode = editorMode === 'level-builder'
+  const requestedType = getRequestedLevelBuilderType()
+  if (levelBuilderControls) levelBuilderControls.classList.toggle('hidden', !isLevelBuilderMode)
+  mazeControls.classList.toggle('hidden', !(isLevelBuilderMode && requestedType === 'maze'))
+  mazeArenaControls.classList.toggle('hidden', !(isLevelBuilderMode && requestedType === 'maze-arena'))
+  arenaControls.classList.toggle('hidden', !(isLevelBuilderMode && requestedType === 'arena'))
+}
+
+function renderLevelBuilderEntitiesList() {
+  if (!levelBuilderEntitiesRoot) return
+  levelBuilderEntitiesRoot.innerHTML = ''
+
+  const entities = getLastLevelBuilderGeneratedEntities()
+  const list = document.createElement('ul')
+  list.className = 'floor-plan-entity-list'
+
+  if (entities.length === 0) {
+    const empty = document.createElement('li')
+    empty.className = 'floor-plan-entity-empty'
+    empty.textContent = 'Generate from a Level Builder volume to see entities.'
+    list.appendChild(empty)
+    levelBuilderEntitiesRoot.appendChild(list)
+    return
+  }
+
+  entities.forEach((mesh) => {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'floor-plan-entity-item'
+    if (selectedBrush === mesh) btn.classList.add('is-selected')
+    const subtype = mesh.userData?.subtype ?? mesh.userData?.type ?? 'object'
+    btn.textContent = `${subtype}_${shortId(mesh.userData?.id)}`
+    btn.title = `Select ${subtype}`
+    btn.setAttribute('aria-label', `Select ${subtype}`)
+    btn.addEventListener('click', () => {
+      if (!mesh.parent || !brushes.includes(mesh)) return
+      selectLight(null)
+      selectBrush(mesh)
+      focusCameraOnObject(mesh)
+    })
+    list.appendChild(btn)
+  })
+
+  levelBuilderEntitiesRoot.appendChild(list)
+}
+
+function getHeaderAddPickerGroup() {
+  if (editorMode === 'brush') return 'object'
+  if (editorMode === 'level-builder') return 'level-builder'
+  if (editorMode === 'floor-plan') return 'floor-plan'
+  return null
+}
+
+function hasLastLevelBuilderState(type) {
+  if (type === 'maze') return Boolean(lastMazeState)
+  if (type === 'arena') return Boolean(lastArenaState)
+  if (type === 'maze-arena') return Boolean(lastMazeArenaState)
+  return false
+}
+
+function runLevelBuilderGenerate(type) {
+  if (type === 'maze') generateMaze()
+  else if (type === 'arena') generateArena()
+  else if (type === 'maze-arena') generateMazeArena()
+}
+
+function runLevelBuilderIterate(type) {
+  if (type === 'maze') regenerateMazeFromLast()
+  else if (type === 'arena') regenerateArenaFromLast()
+  else if (type === 'maze-arena') regenerateMazeArenaFromLast()
+}
+
+function updateHeaderAddButtonState() {
+  if (!(headerAddButton instanceof HTMLButtonElement)) return
+  const group = getHeaderAddPickerGroup()
+  const enabled = group != null
+  headerAddButton.disabled = !enabled
+  if (group === 'object') {
+    headerAddButton.title = 'Add object entity'
+    headerAddButton.setAttribute('aria-label', 'Add object entity')
+  } else if (group === 'level-builder') {
+    headerAddButton.title = 'Add level builder volume'
+    headerAddButton.setAttribute('aria-label', 'Add level builder volume')
+  } else if (group === 'floor-plan') {
+    headerAddButton.title = 'Add floor planner entity'
+    headerAddButton.setAttribute('aria-label', 'Add floor planner entity')
   } else {
-    if (arenaPreview) {
-      arenaPreview.visible = false
-      if (selectedBrush === arenaPreview) selectBrush(null)
-    }
-    if (mazePreview) {
-      mazePreview.visible = false
-      if (selectedBrush === mazePreview) selectBrush(null)
-    }
+    headerAddButton.title = 'Add is available in Object Editor, Level Builder, and Floor Planner'
+    headerAddButton.setAttribute('aria-label', 'Add unavailable in current tool')
   }
 }
 
-document.getElementById('tab-brush').addEventListener('click', () => setEditorMode('brush'))
-document.getElementById('tab-maze').addEventListener('click', () => setEditorMode('maze'))
-document.getElementById('tab-maze-arena').addEventListener('click', () => setEditorMode('maze-arena'))
-document.getElementById('tab-arena').addEventListener('click', () => setEditorMode('arena'))
-document.getElementById('tab-skybox').addEventListener('click', () => setEditorMode('skybox'))
+function updateHeaderRefreshButtonState() {
+  if (!(headerRefreshButton instanceof HTMLButtonElement)) return
+  if (editorMode === 'floor-plan') {
+    headerRefreshButton.disabled = false
+    headerRefreshButton.title = 'Randomize floor plan seed'
+    headerRefreshButton.setAttribute('aria-label', 'Randomize floor plan seed')
+    return
+  }
+  const isLevelBuilderMode = editorMode === 'level-builder'
+  if (!isLevelBuilderMode) {
+    headerRefreshButton.disabled = true
+    headerRefreshButton.title = 'Refresh is available in Level Builder'
+    headerRefreshButton.setAttribute('aria-label', 'Refresh unavailable in current tool')
+    return
+  }
+  const selectedVolume = getSelectedLevelBuilderVolume()
+  const selectedType = selectedVolume?.userData?.levelBuilderType
+  const isValidSelected = Boolean(selectedVolume) && isPreviewValid(selectedVolume, null)
+  const fallbackType = lastLevelBuilderGeneratedType
+  const canIterateFallback = Boolean(fallbackType) && hasLastLevelBuilderState(fallbackType)
+  headerRefreshButton.disabled = !(isValidSelected || canIterateFallback)
+  if (isValidSelected && selectedType) {
+    const action = hasLastLevelBuilderState(selectedType) ? 'Iterate' : 'Generate'
+    headerRefreshButton.title = `${action} selected volume`
+    headerRefreshButton.setAttribute('aria-label', `${action.toLowerCase()} selected level builder volume`)
+    return
+  }
+  if (canIterateFallback) {
+    headerRefreshButton.title = 'Iterate last generated volume'
+    headerRefreshButton.setAttribute('aria-label', 'Iterate last generated level builder volume')
+    return
+  }
+  headerRefreshButton.title = 'Select a valid level builder volume'
+  headerRefreshButton.setAttribute('aria-label', 'No valid level builder action available')
+}
+
+function runLevelBuilderHeaderRefresh() {
+  if (editorMode === 'floor-plan') {
+    const randomizeSeedButton = document.getElementById('fp-randomize-seed')
+    if (randomizeSeedButton instanceof HTMLButtonElement) {
+      randomizeSeedButton.click()
+      return
+    }
+    showToast('Floor planner is still loading. Try refresh again in a moment.', { type: 'warn' })
+    return
+  }
+  if (editorMode !== 'level-builder') return
+  const selectedVolume = getSelectedLevelBuilderVolume()
+  const selectedType = selectedVolume?.userData?.levelBuilderType
+  if (selectedVolume && isPreviewValid(selectedVolume, null) && selectedType) {
+    if (hasLastLevelBuilderState(selectedType)) runLevelBuilderIterate(selectedType)
+    else runLevelBuilderGenerate(selectedType)
+    return
+  }
+  const fallbackType = lastLevelBuilderGeneratedType
+  if (fallbackType && hasLastLevelBuilderState(fallbackType)) {
+    runLevelBuilderIterate(fallbackType)
+    return
+  }
+  if (selectedVolume) {
+    updatePreviewValidity(selectedVolume, null)
+    showToast('Selected volume is invalid. Move or resize it, then try again.', { type: 'warn' })
+  } else {
+    showToast('Select a Level Builder volume first.', { type: 'warn' })
+  }
+  updateHeaderRefreshButtonState()
+}
+
+function setEditorMode(mode) {
+  editorMode = mode
+  const isFloorPlanMode = mode === 'floor-plan'
+  if (rampCreatorState.active) cancelRampCreator()
+  if (toolsSelect && toolsSelect.value !== mode) {
+    toolsSelect.value = mode
+  }
+  if (floorPlanToolRoot) {
+    floorPlanToolRoot.classList.toggle('hidden', !isFloorPlanMode)
+    if (isFloorPlanMode && !floorPlanToolMounted) {
+      mountFloorPlanTool({
+        previewContainer: floorPlanToolRoot,
+        controlsContainer: floorPlanControlsRoot,
+        entitiesContainer: floorPlanEntitiesRoot,
+      })
+      floorPlanToolMounted = true
+    }
+  }
+  viewport.classList.toggle('hidden', isFloorPlanMode)
+  if (fileButtons) fileButtons.classList.remove('hidden')
+  brushControls.classList.toggle('hidden', mode !== 'brush')
+  updateLevelBuilderControlPanels()
+  skyboxControls.classList.toggle('hidden', mode !== 'skybox')
+  floorPlanControls.classList.toggle('hidden', !isFloorPlanMode)
+  if (cameraControlsPanel) cameraControlsPanel.classList.toggle('hidden', isFloorPlanMode)
+  if (sceneListPanel) sceneListPanel.classList.toggle('hidden', mode !== 'brush')
+  if (floorPlanEntitiesPanel) floorPlanEntitiesPanel.classList.toggle('hidden', !isFloorPlanMode)
+  if (levelBuilderEntitiesPanel) levelBuilderEntitiesPanel.classList.toggle('hidden', mode !== 'level-builder')
+  updateHeaderAddButtonState()
+  updateHeaderRefreshButtonState()
+  sky.visible = mode === 'skybox' && !isFloorPlanMode
+  useLitMaterials = mode === 'skybox' && !isFloorPlanMode
+  updateBrushMaterials(useLitMaterials)
+  updateShadowState(mode === 'skybox')
+  if (mode === 'level-builder') {
+    updateLevelBuilderControlPanels()
+    renderLevelBuilderEntitiesList()
+    updateArenaPreviewVisibility()
+    updateMazePreviewVisibility()
+    getLevelBuilderVolumes('maze-arena').forEach((mesh) => {
+      mesh.visible = true
+    })
+    updateArenaPreviewValidity()
+    updateMazePreviewValidity()
+    setCurrentTool('translate')
+    setTransformMode('translate')
+  } else {
+    getLevelBuilderVolumes().forEach((mesh) => {
+      mesh.visible = false
+    })
+  }
+  updateHeaderRefreshButtonState()
+}
+
+toolsSelect?.addEventListener('change', (event) => {
+  const nextMode = event.target.value
+  setEditorMode(nextMode)
+})
+
+setEditorMode(toolsSelect?.value ?? 'brush')
+
+document.getElementById('level-builder-type')?.addEventListener('change', () => {
+  if (isLevelBuilderVolume(selectedBrush)) {
+    updateLevelBuilderTypeSelect(selectedBrush.userData.levelBuilderType)
+  }
+  updateLevelBuilderControlPanels()
+})
 
 // --- Collapsible controls area ---
 const controlsArea = document.getElementById('controls-area')
@@ -3157,17 +3547,13 @@ if (controlsArea && controlsAreaToggle) {
   })
 }
 
-// --- Collapsible panels ---
+// --- Panel headers (always expanded; main controls toggle handles collapse) ---
 document.querySelectorAll('.panel-header').forEach((btn) => {
   const panel = btn.closest('.panel')
-  const syncAriaExpanded = () => {
-    btn.setAttribute('aria-expanded', String(!panel.classList.contains('collapsed')))
-  }
-  syncAriaExpanded()
-  btn.addEventListener('click', () => {
-    panel.classList.toggle('collapsed')
-    syncAriaExpanded()
-  })
+  if (panel) panel.classList.remove('collapsed')
+  btn.setAttribute('aria-expanded', 'true')
+  btn.setAttribute('aria-disabled', 'true')
+  btn.tabIndex = -1
 })
 
 // --- Maze slider value display ---
@@ -3237,20 +3623,12 @@ bindMazeSlider('maze-rows', 'maze-rows-value', updateMazePreviewFromControls)
 bindMazeSlider('maze-space', 'maze-space-value', updateMazePreviewFromControls)
 bindMazeSlider('maze-height', 'maze-height-value', updateMazePreviewFromControls)
 
-bindMazeSlider('maze-arena-cols', 'maze-arena-cols-value', () => {
-  if (editorMode === 'maze-arena') ensureMazeArenaPreview()
-})
-bindMazeSlider('maze-arena-rows', 'maze-arena-rows-value', () => {
-  if (editorMode === 'maze-arena') ensureMazeArenaPreview()
-})
+bindMazeSlider('maze-arena-cols', 'maze-arena-cols-value', updateMazeArenaPreviewFromControls)
+bindMazeSlider('maze-arena-rows', 'maze-arena-rows-value', updateMazeArenaPreviewFromControls)
 bindMazeSlider('maze-arena-arena-count', 'maze-arena-arena-count-value')
-bindMazeSlider('maze-arena-space', 'maze-arena-space-value', () => {
-  if (editorMode === 'maze-arena') ensureMazeArenaPreview()
-})
+bindMazeSlider('maze-arena-space', 'maze-arena-space-value', updateMazeArenaPreviewFromControls)
 bindMazeSlider('maze-arena-thickness', 'maze-arena-thickness-value')
-bindMazeSlider('maze-arena-height', 'maze-arena-height-value', () => {
-  if (editorMode === 'maze-arena') ensureMazeArenaPreview()
-})
+bindMazeSlider('maze-arena-height', 'maze-arena-height-value', updateMazeArenaPreviewFromControls)
 bindMazeSlider('maze-arena-density', 'maze-arena-density-value')
 bindMazeSlider('maze-arena-buildings', 'maze-arena-buildings-value')
 
@@ -3468,7 +3846,10 @@ document.getElementById('arena-preview-visible')?.addEventListener('change', () 
 })
 document.getElementById('maze-arena-preview-visible')?.addEventListener('change', () => {
   const checkbox = document.getElementById('maze-arena-preview-visible')
-  if (mazePreview) mazePreview.visible = checkbox?.checked ?? true
+  if (checkbox) checkbox.checked = true
+  getLevelBuilderVolumes('maze-arena').forEach((mesh) => {
+    mesh.visible = true
+  })
 })
 
 document.getElementById('btn-generate-arena').addEventListener('click', generateArena)
@@ -3504,7 +3885,6 @@ const inputHandler = createInputHandler({
   pickBrush,
   isGizmoHit,
   pickLight,
-  reportPick,
   get selectedLight() {
     return selectedLight
   },
@@ -3637,14 +4017,47 @@ function addEntityByType(entityType) {
     case 'spot_light': addSpotLight(); return
     case 'directional_light': addDirectionalLight(); return
     case 'ambient_light': addAmbientLight(); return
+    case 'level_builder_maze': {
+      const mesh = addMazeVolume()
+      selectBrush(mesh)
+      focusCameraOnObject(mesh)
+      updateLevelBuilderTypeSelect('maze')
+      setEditorMode('level-builder')
+      updateSceneList()
+      return
+    }
+    case 'level_builder_maze_arena': {
+      const mesh = addMazeArenaVolume()
+      selectBrush(mesh)
+      focusCameraOnObject(mesh)
+      updateLevelBuilderTypeSelect('maze-arena')
+      setEditorMode('level-builder')
+      updateSceneList()
+      return
+    }
+    case 'level_builder_arena': {
+      const mesh = addArenaVolume()
+      selectBrush(mesh)
+      focusCameraOnObject(mesh)
+      updateLevelBuilderTypeSelect('arena')
+      setEditorMode('level-builder')
+      updateSceneList()
+      return
+    }
     default: return
   }
 }
 
 function openEntityPicker(group = 'object') {
   if (!entityPickerOverlay) return
-  activeEntityPickerGroup = group === 'light' ? 'light' : 'object'
-  entityPickerTitle.textContent = activeEntityPickerGroup === 'light' ? 'Add light' : 'Add object'
+  if (group === 'light') activeEntityPickerGroup = 'light'
+  else if (group === 'level-builder') activeEntityPickerGroup = 'level-builder'
+  else activeEntityPickerGroup = 'object'
+  entityPickerTitle.textContent = activeEntityPickerGroup === 'light'
+    ? 'Add light'
+    : activeEntityPickerGroup === 'level-builder'
+      ? 'Add level builder volume'
+      : 'Add object'
   entityPickerOverlay.querySelectorAll('[data-entity-group]').forEach((option) => {
     if (!(option instanceof HTMLElement)) return
     option.hidden = option.dataset.entityGroup !== activeEntityPickerGroup
@@ -3654,6 +4067,22 @@ function openEntityPicker(group = 'object') {
 
 document.getElementById('btn-open-object-entity-picker')?.addEventListener('click', () => openEntityPicker('object'))
 document.getElementById('btn-open-light-entity-picker')?.addEventListener('click', () => openEntityPicker('light'))
+document.getElementById('btn-open-level-builder-entity-picker')?.addEventListener('click', () => openEntityPicker('level-builder'))
+headerAddButton?.addEventListener('click', () => {
+  const group = getHeaderAddPickerGroup()
+  if (!group) return
+  if (group === 'floor-plan') {
+    const floorPlanAddButton = document.getElementById('fp-add-entity')
+    if (floorPlanAddButton instanceof HTMLButtonElement) {
+      floorPlanAddButton.click()
+      return
+    }
+    showToast('Floor planner is still loading. Try add again in a moment.', { type: 'warn' })
+    return
+  }
+  openEntityPicker(group)
+})
+headerRefreshButton?.addEventListener('click', runLevelBuilderHeaderRefresh)
 entityPickerOverlay?.addEventListener('click', (event) => {
   if (event.target === entityPickerOverlay) {
     closeEntityPicker()
@@ -3742,8 +4171,11 @@ function animate() {
   orbitControls.update()
   updateSpotLightHelpers()
   updateDirectionalLightHelpers()
-  if (arenaPreview?.visible) updateArenaPreviewValidity()
-  if (mazePreview?.visible) updateMazePreviewValidity()
+  if (getLevelBuilderVolumes('arena').some((mesh) => mesh.visible)) updateArenaPreviewValidity()
+  if (getLevelBuilderVolumes('maze').some((mesh) => mesh.visible) || getLevelBuilderVolumes('maze-arena').some((mesh) => mesh.visible)) {
+    updateMazePreviewValidity()
+  }
+  if (editorMode === 'level-builder') updateHeaderRefreshButtonState()
   renderer.render(scene, camera)
 }
 animate()
