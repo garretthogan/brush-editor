@@ -1,5 +1,21 @@
-import { generateFloorPlan, renderFloorPlanSvg } from '../../../occult-shooter/src/floorPlan/generator.js'
-import { decodeSvgMetadata, encodeSvgMetadata } from '../../../occult-shooter/src/shared/svgMetadata.js'
+import { generateFloorPlan, renderFloorPlanSvg } from './floor-plan-engine.js'
+
+function encodeSvgMetadata(metadata) {
+  return btoa(encodeURIComponent(JSON.stringify(metadata)))
+}
+
+function decodeSvgMetadata(svgElement) {
+  const metadataNode = svgElement?.querySelector('#occult-floorplan-meta')
+  if (metadataNode == null) return null
+  const encoded = metadataNode.textContent?.trim()
+  if (encoded == null || encoded.length === 0) return null
+  try {
+    const json = decodeURIComponent(atob(encoded))
+    return JSON.parse(json)
+  } catch {
+    return null
+  }
+}
 
 const MAX_SEED = 4294967295
 const SETTINGS_KEY = 'brushEditor.floorPlanTool.settings'
@@ -207,6 +223,14 @@ export function mountFloorPlanTool(containerElement) {
   const width = createNumberField('Width (m)', 'fp-width', saved?.width ?? 36, 12, 80)
   const height = createNumberField('Height (m)', 'fp-height', saved?.height ?? 24, 12, 80)
   const hallways = createNumberField('Hallway count', 'fp-hallways', saved?.hallwayCount ?? 1, 1, 4)
+  const hallwayWidth = createRangeField(
+    'Hallway width (cells)',
+    'fp-max-hallway-width',
+    saved?.maxCorridorWidthCells ?? 13,
+    3,
+    25,
+    1
+  )
   const doors = createNumberField('Target rooms', 'fp-doors', saved?.doorCount ?? 6, 1, 24)
   const windows = createNumberField('Max windows', 'fp-windows', saved?.maxWindowCount ?? 8, 0, 24)
   const lights = createNumberField('Max lights', 'fp-lights', saved?.maxLightCount ?? 10, 0, 80)
@@ -240,6 +264,7 @@ export function mountFloorPlanTool(containerElement) {
     width.row,
     height.row,
     hallways.row,
+    hallwayWidth.row,
     doors.row,
     windows.row,
     lights.row,
@@ -299,6 +324,7 @@ export function mountFloorPlanTool(containerElement) {
         width: readPositiveInt(width.input, 36),
         height: readPositiveInt(height.input, 24),
         hallwayCount: readPositiveInt(hallways.input, 1),
+        maxCorridorWidthCells: readBoundedInt(hallwayWidth.input, 13, 3, 25),
         doorCount: readPositiveInt(doors.input, 6),
         maxWindowCount: readPositiveInt(windows.input, 8),
         maxLightCount: readBoundedInt(lights.input, 10, 0, 80),
@@ -580,6 +606,7 @@ export function mountFloorPlanTool(containerElement) {
       width: readPositiveInt(width.input, 36),
       height: readPositiveInt(height.input, 24),
       hallwayCount: readPositiveInt(hallways.input, 1),
+      maxCorridorWidthCells: readBoundedInt(hallwayWidth.input, 13, 3, 25),
       doorCount: readPositiveInt(doors.input, 6),
       maxWindowCount: readPositiveInt(windows.input, 8),
       maxLightCount: readBoundedInt(lights.input, 10, 0, 80),
