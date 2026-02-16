@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>GBrush Editor</title>
   </head>
-  <body>
+  <body class="tui">
     <div id="app">
       <div id="header">
         <div id="mode-tabs">
@@ -17,14 +17,20 @@
           <button id="tab-skybox" class="tab">Preview</button>
         </div>
         <div id="file-buttons">
-          <button id="btn-save" title="Save Level" aria-label="Save level (export GLB)">Save</button>
-          <button id="btn-load" title="Load Level / Import GLB" aria-label="Load level from GLB or GLTF file">Load</button>
+          <button id="btn-save" class="tab" title="Save Level" aria-label="Save level (export GLB)">Save</button>
+          <button id="btn-load" class="tab" title="Load Level / Import GLB" aria-label="Load level from GLB or GLTF file">Load</button>
         </div>
       </div>
       <div id="viewport">
         <div id="pick-debug" class="debug-overlay hidden"></div>
       </div>
       <div id="controls-area">
+        <button type="button" class="controls-area-header" id="controls-area-toggle" aria-expanded="true" aria-controls="controls-area-content" title="Toggle controls panel" aria-label="Toggle controls panel">
+          <span class="controls-area-chevron">▼</span>
+          Controls
+        </button>
+        <div id="controls-area-content" class="controls-area-content">
+        <div class="controls-panels">
         <div id="brush-controls" class="mode-panel">
           <div class="panel collapsible">
             <button class="panel-header" data-panel="brush-tools">
@@ -68,7 +74,7 @@
                 <button id="btn-move" title="Move Brush" aria-label="Move selected object">Move</button>
                 <button id="btn-rotate" title="Rotate Brush" aria-label="Rotate selected object">Rotate</button>
                 <button id="btn-scale" title="Scale Brush" aria-label="Scale selected object">Scale</button>
-                <button id="btn-delete" title="Delete Selected" aria-label="Delete selected object (Undo to restore)">Delete</button>
+                <button id="btn-delete" class="danger" title="Delete Selected" aria-label="Delete selected object (Undo to restore)">Delete</button>
               </div>
               <div class="tool-divider" role="separator"></div>
               <div class="scene-list">
@@ -477,24 +483,8 @@
             Assets courtesy of Kenney
           </a>
         </div>
-      </div>
-      <div id="export-modal" class="modal hidden" role="dialog" aria-modal="true">
-        <div class="modal-backdrop"></div>
-        <div class="modal-content">
-          <div class="modal-header">
-            <div class="modal-title">Export GLB</div>
-          </div>
-          <div class="modal-body">
-            <div class="modal-instructions">Select the objects and lights to export.</div>
-            <div id="export-list" class="export-list"></div>
-          </div>
-          <div class="modal-actions">
-            <button id="btn-export-cancel" type="button">Cancel</button>
-            <button id="btn-export-confirm" type="button" class="primary">Export</button>
-          </div>
         </div>
-      </div>
-      <div id="camera-controls">
+        <div id="camera-controls">
         <div class="panel collapsible">
           <button class="panel-header" data-panel="camera-controls">
             <span class="panel-chevron">▼</span>
@@ -511,6 +501,24 @@
               <input type="range" id="camera-fly-speed" min="0" max="20" step="0.5" value="6" />
               <span id="camera-fly-speed-value">6</span>
             </div>
+          </div>
+        </div>
+        </div>
+        </div>
+      </div>
+      <div id="export-modal" class="modal hidden" role="dialog" aria-modal="true">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <div class="modal-title">Export GLB</div>
+          </div>
+          <div class="modal-body">
+            <div class="modal-instructions">Select the objects and lights to export.</div>
+            <div id="export-list" class="export-list"></div>
+          </div>
+          <div class="modal-actions">
+            <button id="btn-export-cancel" type="button">Cancel</button>
+            <button id="btn-export-confirm" type="button" class="primary">Export</button>
           </div>
         </div>
       </div>

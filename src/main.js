@@ -1,5 +1,6 @@
 import './lib/polyfills.js'
 import './style.css'
+import './tui.css'
 import * as THREE from 'three'
 import { initScene } from './lib/scene-setup.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
@@ -3147,6 +3148,16 @@ document.getElementById('tab-maze').addEventListener('click', () => setEditorMod
 document.getElementById('tab-maze-arena').addEventListener('click', () => setEditorMode('maze-arena'))
 document.getElementById('tab-arena').addEventListener('click', () => setEditorMode('arena'))
 document.getElementById('tab-skybox').addEventListener('click', () => setEditorMode('skybox'))
+
+// --- Collapsible controls area ---
+const controlsArea = document.getElementById('controls-area')
+const controlsAreaToggle = document.getElementById('controls-area-toggle')
+if (controlsArea && controlsAreaToggle) {
+  controlsAreaToggle.addEventListener('click', () => {
+    controlsArea.classList.toggle('collapsed')
+    controlsAreaToggle.setAttribute('aria-expanded', String(!controlsArea.classList.contains('collapsed')))
+  })
+}
 
 // --- Collapsible panels ---
 document.querySelectorAll('.panel-header').forEach((btn) => {
