@@ -1197,12 +1197,13 @@ function applyLightScaleToDistance(entry) {
 
 function getMazeControls() {
   const flatFloorSizeCm = parseFloat(document.getElementById('maze-flat-floor-size')?.value ?? '20')
+  const wallHeightCm = Math.max(20, parseFloat(document.getElementById('maze-height')?.value ?? '200') || 200)
   return {
     cols: parseInt(document.getElementById('maze-cols').value, 10),
     rows: parseInt(document.getElementById('maze-rows').value, 10),
     spaceBetweenWalls: parseFloat(document.getElementById('maze-space').value) / CM_PER_UNIT,
     wallThickness: parseFloat(document.getElementById('maze-thickness').value) / CM_PER_UNIT,
-    wallHeight: parseFloat(document.getElementById('maze-height').value) / CM_PER_UNIT,
+    wallHeight: wallHeightCm / CM_PER_UNIT,
     exitWidth: parseInt(document.getElementById('maze-exit-width').value, 10),
     centerRoomSize: parseInt(document.getElementById('maze-center-size').value, 10),
     layout: document.getElementById('maze-start-from-center').checked ? 'center-out' : 'out-out',
@@ -1693,6 +1694,7 @@ function generateMaze() {
   }
   const { grid, cols, rows } = mazeResult
 
+  updateMazePreviewFromControls()
   const preview = ensureMazePreview()
   const baseOffset = getPreviewBaseOffset(preview, ctrl.wallHeight)
   const baseRotation = preview?.rotation ? preview.rotation.clone() : null
