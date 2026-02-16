@@ -42,12 +42,8 @@
                 <label for="texture-select">Texture</label>
                 <select id="texture-select"></select>
               </div>
-              <div class="add-brushes">
-                <button id="btn-add-floor" title="Add Floor (10×10 m)" aria-label="Add floor brush to scene">Add Floor</button>
-                <button id="btn-add-wall" title="Add Wall (10×4 m)" aria-label="Add wall brush to scene">Add Wall</button>
-                <button id="btn-add-cylinder" title="Add Cylinder Brush" aria-label="Add cylinder brush to scene">Add Cylinder</button>
-                <button id="btn-add-ramp" title="Add Ramp (select four points: two per end)" aria-label="Add ramp by selecting four corner points (two per end)">Add Ramp</button>
-                <button id="btn-add-player-start" title="Add Player Start (empty transform)" aria-label="Add player start spawn point">Add Player Start</button>
+              <div class="add-entity-actions">
+                <button id="btn-open-object-entity-picker" type="button" title="Add object entity" aria-label="Open add object menu">Add</button>
               </div>
               <div id="ramp-creator-panel" class="ramp-creator-panel hidden">
                 <div class="ramp-creator-status" id="ramp-creator-status">Click four points: two for low end, two for high end</div>
@@ -394,11 +390,8 @@
               Lights
             </button>
             <div class="panel-content" id="panel-light-tools">
-              <div class="add-lights">
-                <button id="btn-add-point-light" title="Add Point Light">Point Light</button>
-                <button id="btn-add-spot-light" title="Add Spot Light">Spot Light</button>
-                <button id="btn-add-directional-light" title="Add Directional Light">Directional</button>
-                <button id="btn-add-ambient-light" title="Add Ambient Light">Ambient</button>
+              <div class="add-entity-actions">
+                <button id="btn-open-light-entity-picker" type="button" title="Add light entity" aria-label="Open add light menu">Add</button>
               </div>
               <div class="tool-divider" role="separator"></div>
               <div id="light-controls" class="light-controls">
@@ -520,6 +513,50 @@
             <button id="btn-export-cancel" type="button">Cancel</button>
             <button id="btn-export-confirm" type="button" class="primary">Export</button>
           </div>
+        </div>
+      </div>
+      <div id="entity-picker-overlay" class="entity-picker-overlay" hidden>
+        <div id="entity-picker-dialog" class="entity-picker-dialog" role="dialog" aria-modal="true" aria-label="Select entity type to add">
+          <h3 id="entity-picker-title">Add entity</h3>
+          <div class="entity-picker-options">
+            <button type="button" class="entity-picker-option" data-entity-group="object" data-entity-type="floor" aria-label="Add floor">
+              <span aria-hidden="true">▦</span>
+              <span>Floor</span>
+            </button>
+            <button type="button" class="entity-picker-option" data-entity-group="object" data-entity-type="wall" aria-label="Add wall">
+              <span aria-hidden="true">▤</span>
+              <span>Wall</span>
+            </button>
+            <button type="button" class="entity-picker-option" data-entity-group="object" data-entity-type="cylinder" aria-label="Add cylinder">
+              <span aria-hidden="true">◯</span>
+              <span>Cylinder</span>
+            </button>
+            <button type="button" class="entity-picker-option" data-entity-group="object" data-entity-type="ramp" aria-label="Add ramp">
+              <span aria-hidden="true">◢</span>
+              <span>Ramp</span>
+            </button>
+            <button type="button" class="entity-picker-option" data-entity-group="object" data-entity-type="player_start" aria-label="Add player start">
+              <span aria-hidden="true">▲</span>
+              <span>Player Start</span>
+            </button>
+            <button type="button" class="entity-picker-option" data-entity-group="light" data-entity-type="point_light" aria-label="Add point light">
+              <span aria-hidden="true">●</span>
+              <span>Point Light</span>
+            </button>
+            <button type="button" class="entity-picker-option" data-entity-group="light" data-entity-type="spot_light" aria-label="Add spot light">
+              <span aria-hidden="true">◉</span>
+              <span>Spot Light</span>
+            </button>
+            <button type="button" class="entity-picker-option" data-entity-group="light" data-entity-type="directional_light" aria-label="Add directional light">
+              <span aria-hidden="true">☼</span>
+              <span>Directional</span>
+            </button>
+            <button type="button" class="entity-picker-option" data-entity-group="light" data-entity-type="ambient_light" aria-label="Add ambient light">
+              <span aria-hidden="true">◌</span>
+              <span>Ambient</span>
+            </button>
+          </div>
+          <button type="button" class="entity-picker-cancel">Cancel</button>
         </div>
       </div>
     </div>

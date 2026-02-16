@@ -663,16 +663,31 @@
     flex-wrap: wrap;
     gap: var(--tui-gap);
   }
-  body.tui .add-brushes,
+  body.tui .add-entity-actions,
   body.tui .brush-actions,
   body.tui .add-lights {
     display: flex;
     flex-wrap: wrap;
     gap: var(--tui-gap);
   }
-  body.tui .add-brushes button.active,
+  body.tui .add-entity-actions > button {
+    min-width: 84px;
+  }
+  body.tui .add-entity-actions button.active,
   body.tui .brush-actions button.active {
     border-color: var(--tui-pink);
+  }
+  body.tui .entity-picker-dialog {
+    border-color: var(--tui-line);
+    background: color-mix(in oklab, var(--tui-bg) 94%, black 6%);
+  }
+  body.tui .entity-picker-option {
+    border-color: var(--tui-line);
+    background: color-mix(in oklab, var(--tui-panel) 88%, black 12%);
+    color: var(--tui-fg);
+  }
+  body.tui .entity-picker-option:hover {
+    border-color: var(--tui-cyan);
   }
   body.tui .ramp-creator-panel {
     display: flex;
