@@ -1,6 +1,7 @@
 import './lib/polyfills.js'
 import './style.css'
-import './tui.css'
+import './design-system.css'
+import './brush-editor-app.css'
 import * as THREE from 'three'
 import { initScene } from './lib/scene-setup.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
@@ -4141,6 +4142,35 @@ const resizeObserver = new ResizeObserver(() => {
 })
 resizeObserver.observe(viewport)
 
+// --- WebGL context loss ---
+let webglContextLost = false
+const canvas = renderer.domElement
+canvas.addEventListener(
+  'webglcontextlost',
+  (e) => {
+    e.preventDefault()
+    webglContextLost = true
+    showToast('WebGL context lost. The 3D view will not render until you refresh.', {
+      type: 'error',
+      recoveryLabel: 'Refresh',
+      onRecovery: () => location.reload(),
+    })
+  },
+  false
+)
+canvas.addEventListener(
+  'webglcontextrestored',
+  () => {
+    webglContextLost = false
+    showToast('WebGL context restored. If the scene looks wrong, refresh the page.', {
+      type: 'info',
+      recoveryLabel: 'Refresh',
+      onRecovery: () => location.reload(),
+    })
+  },
+  false
+)
+
 // --- Loop ---
 function animate() {
   requestAnimationFrame(animate)
@@ -4176,6 +4206,8 @@ function animate() {
     updateMazePreviewValidity()
   }
   if (editorMode === 'level-builder') updateHeaderRefreshButtonState()
-  renderer.render(scene, camera)
+  if (!webglContextLost && !renderer.getContext().isContextLost()) {
+    renderer.render(scene, camera)
+  }
 }
 animate()
