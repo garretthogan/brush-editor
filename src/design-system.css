@@ -479,7 +479,7 @@ body.tui button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
   border-color: var(--tui-line);
-  border-width: 1px;
+  /* Keep border-width same as enabled (2px) to prevent layout shift when toggling disabled */
 }
 
 body.tui button.primary {
