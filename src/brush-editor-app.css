@@ -1,0 +1,334 @@
+/*
+  Brush-editor app-specific styles.
+  Uses the TUI design system; this file adds layout and app-only components.
+*/
+
+/* Controls area: in-flow at bottom (override design system overlay) */
+body.tui #controls-area {
+  position: static;
+  bottom: auto;
+  left: auto;
+  right: auto;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  flex: 0 0 auto;
+  border-top: var(--tui-bw) solid var(--tui-line-strong);
+}
+
+body.tui .controls-area-content {
+  display: grid;
+  grid-template-columns: minmax(0, 360px) minmax(260px, 1fr);
+  gap: var(--tui-gap);
+  align-items: start;
+}
+
+body.tui .panel-chevron {
+  display: none;
+}
+
+/* Save/Load dropdown menus */
+body.tui .save-dropdown,
+body.tui .load-dropdown {
+  position: relative;
+}
+
+body.tui .save-menu,
+body.tui .load-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: var(--tui-gap-sm);
+  min-width: 100%;
+  display: none;
+  flex-direction: column;
+  border: var(--tui-bw) solid var(--tui-line-strong);
+  background: var(--tui-bg);
+  z-index: 200;
+}
+
+body.tui .save-menu.open,
+body.tui .load-menu.open {
+  display: flex;
+}
+
+body.tui .save-menu button,
+body.tui .load-menu button {
+  border: 0;
+  border-bottom: var(--tui-bw) solid var(--tui-line);
+  text-align: left;
+  padding: var(--tui-pad-2);
+}
+
+body.tui .save-menu button:last-child,
+body.tui .load-menu button:last-child {
+  border-bottom: 0;
+}
+
+body.tui .save-menu button:hover,
+body.tui .load-menu button:hover {
+  border-color: var(--tui-cyan);
+}
+
+#tools-select {
+  min-width: 180px;
+}
+
+#file-buttons {
+  margin-left: auto;
+}
+
+/* Floor plan tool */
+body.tui .floor-plan-tool-root {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border-bottom: var(--tui-bw) solid var(--tui-line);
+  background: var(--tui-bg);
+  background-image:
+    linear-gradient(rgba(55, 55, 55, 0.35) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(55, 55, 55, 0.35) 1px, transparent 1px),
+    linear-gradient(rgba(85, 85, 85, 0.45) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(85, 85, 85, 0.45) 1px, transparent 1px);
+  background-size: 24px 24px, 24px 24px, 120px 120px, 120px 120px;
+  background-position: 0 0, 0 0, 0 0, 0 0;
+}
+
+body.tui .floor-plan-controls {
+  display: grid;
+  gap: var(--tui-gap);
+  align-content: start;
+}
+
+body.tui .floor-plan-controls h2 {
+  margin: 0 0 var(--tui-gap-sm);
+  font-size: 1rem;
+}
+
+body.tui .floor-plan-control {
+  display: grid;
+  gap: 6px;
+}
+
+body.tui .floor-plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+body.tui .floor-plan-status,
+body.tui .floor-plan-stats {
+  margin: 0;
+  color: var(--tui-muted);
+  font-size: var(--tui-font-size-sm);
+}
+
+body.tui .floor-plan-preview {
+  min-height: calc(100vh - 96px);
+  overflow: auto;
+  border: 2px solid var(--tui-line-strong);
+  padding: var(--tui-pad-1);
+  background: var(--tui-bg);
+}
+
+body.tui .floor-plan-preview-content {
+  position: relative;
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  background-color: var(--tui-bg);
+  background-image:
+    linear-gradient(rgba(51, 51, 51, 0.35) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(51, 51, 51, 0.35) 1px, transparent 1px),
+    linear-gradient(rgba(74, 110, 150, 0.45) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(74, 110, 150, 0.45) 1px, transparent 1px);
+  background-size: 24px 24px, 24px 24px, 120px 120px, 120px 120px;
+}
+
+body.tui .floor-plan-preview-content::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  background-image:
+    linear-gradient(rgba(130, 130, 130, 0.14) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(130, 130, 130, 0.14) 1px, transparent 1px),
+    linear-gradient(rgba(175, 175, 175, 0.2) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(175, 175, 175, 0.2) 1px, transparent 1px);
+  background-size: 24px 24px, 24px 24px, 120px 120px, 120px 120px;
+}
+
+body.tui .floor-plan-preview svg {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: auto;
+  background: var(--tui-bg);
+  display: block;
+  cursor: grab;
+}
+
+body.tui .floor-plan-preview svg .bg {
+  fill: var(--tui-bg);
+}
+
+body.tui .floor-plan-preview svg.is-panning {
+  cursor: grabbing;
+}
+
+body.tui .floor-plan-entity-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: var(--tui-gap-sm);
+}
+
+body.tui .floor-plan-entity-item,
+body.tui .floor-plan-entity-empty {
+  border: 2px solid var(--tui-line-strong);
+  padding: var(--tui-pad-1) var(--tui-pad-2);
+  font-size: var(--tui-font-size-sm);
+  color: var(--tui-fg);
+}
+
+body.tui .floor-plan-entity-item {
+  width: 100%;
+  text-align: left;
+}
+
+body.tui .floor-plan-entity-item.is-selected {
+  border-color: var(--tui-fg);
+  outline: 2px solid var(--tui-fg);
+  outline-offset: 1px;
+}
+
+body.tui .floor-plan-entity-empty {
+  color: var(--tui-muted);
+}
+
+/* Scene list */
+body.tui .scene-list-content {
+  height: 240px;
+}
+
+body.tui .scene-list-group {
+  border: var(--tui-bw) solid var(--tui-line);
+  padding: var(--tui-pad-1);
+}
+
+body.tui .scene-list-group > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+body.tui .scene-list-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+body.tui .scene-list-subitems {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tui-pad-1);
+}
+
+/* Entity picker overlay */
+body.tui .entity-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+body.tui .entity-picker-overlay[hidden] {
+  display: none !important;
+}
+
+body.tui .entity-picker-dialog {
+  width: min(440px, calc(100vw - 32px));
+  display: grid;
+  gap: var(--tui-gap);
+  padding: var(--tui-pad-2);
+}
+
+body.tui .entity-picker-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--tui-gap);
+}
+
+/* Ramp creator */
+body.tui .ramp-creator-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tui-gap);
+  padding: var(--tui-pad-2) 0;
+  border-top: var(--tui-bw) solid var(--tui-line);
+  margin-top: var(--tui-gap);
+}
+
+body.tui .ramp-creator-status {
+  color: var(--tui-muted);
+}
+
+/* Light controls */
+body.tui .light-controls-title {
+  color: var(--tui-muted);
+  margin-bottom: var(--tui-gap-sm);
+}
+
+body.tui .light-controls-empty {
+  color: var(--tui-muted);
+}
+
+body.tui .add-lights {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tui-gap);
+}
+
+/* Panel layout - right column: camera, scene list, floor plan entities, level builder entities */
+body.tui #camera-controls {
+  position: static;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  width: 100%;
+  min-width: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+  overflow-x: visible;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tui-gap);
+}
+
+body.tui #camera-controls > .panel {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+body.tui #level-builder-entities-panel {
+  min-height: 0;
+}
+
+body.tui #panel-level-builder-entities {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+body.tui .controls-panels {
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+body.tui .add-entity-actions > button {
+  min-width: 84px;
+}
