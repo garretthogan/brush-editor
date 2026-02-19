@@ -45,6 +45,17 @@
                 <label for="texture-select">Texture</label>
                 <select id="texture-select"></select>
               </div>
+              <div class="control-row">
+                <label for="csg-operation-select">CSG mode</label>
+                <select id="csg-operation-select" aria-label="CSG operation for new or selected brush" title="Add: union with scene. Subtract: carve out. Intersect: keep only overlap.">
+                  <option value="ADDITION">Add</option>
+                  <option value="SUBTRACTION">Subtract</option>
+                  <option value="INTERSECTION">Intersect</option>
+                </select>
+              </div>
+              <div class="control-row" id="csg-include-row" style="display: none;">
+                <button type="button" id="btn-include-in-csg" aria-label="Include selected mesh in CSG so you can add, subtract, or intersect with it">Include in CSG</button>
+              </div>
               <div class="add-entity-actions">
                 <button id="btn-open-object-entity-picker" type="button" title="Add object entity" aria-label="Open add object menu">Add</button>
               </div>

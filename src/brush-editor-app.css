@@ -3,17 +3,42 @@
   Uses the TUI design system; this file adds layout and app-only components.
 */
 
-/* Controls area: in-flow at bottom (override design system overlay) */
+/* Viewport: full size; controls overlay from bottom */
+body.tui #viewport {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  flex: none;
+}
+
+/* Controls: bottom bar, full width. When expanded: max 50vh; when collapsed: single row only */
 body.tui #controls-area {
-  position: static;
-  bottom: auto;
-  left: auto;
-  right: auto;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
   width: 100%;
-  max-width: none;
-  max-height: none;
-  flex: 0 0 auto;
+  max-width: 100vw;
+  display: flex;
+  flex-direction: column;
   border-top: var(--tui-bw) solid var(--tui-line-strong);
+  background: var(--tui-controls-area-bg, rgba(0, 0, 0, 0.9));
+  z-index: 10;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4);
+}
+
+body.tui #controls-area:not(.collapsed) {
+  max-height: 50vh;
+}
+
+body.tui #controls-area.collapsed {
+  max-height: none;
+  height: fit-content;
+}
+
+body.tui #controls-area.collapsed .controls-area-content {
+  display: none !important;
 }
 
 body.tui .controls-area-content {
@@ -21,6 +46,9 @@ body.tui .controls-area-content {
   grid-template-columns: minmax(0, 360px) minmax(260px, 1fr);
   gap: var(--tui-gap);
   align-items: start;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 body.tui .panel-chevron {

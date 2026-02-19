@@ -1,3 +1,65 @@
+# Cursor Rules — Three.js Documentation-First
+
+## Scope
+These rules apply whenever the task involves Three.js, WebGL/WebGPU rendering, 3D scenes, loaders, materials, shaders, TSL, or any file importing from `three` or `three/*`.
+
+## Hard Requirement: Docs-first workflow
+1. Before writing or editing Three.js-related code, consult the official Three.js documentation:
+   - LLM docs index: https://threejs.org/docs/llms.txt
+   - Full inline docs (incl. TSL): https://threejs.org/docs/llms-full.txt
+   - Manual: https://threejs.org/manual/
+   - API reference: https://threejs.org/docs/
+2. If uncertain about an API, class name, constructor signature, property name, loader usage, or example import path:
+   - STOP and look it up in the official docs above.
+   - Prefer official docs/manual over blog posts or random snippets.
+3. When you use something non-trivial (renderer config, loader config, materials, shaders/TSL, controls), include a short comment with the doc URL you consulted.
+
+## Modern import policy (no outdated CDN patterns)
+- Use ESM + import maps for browser examples (do not use old global `THREE` CDN patterns).
+- Always follow the current Three.js “Installation / import maps” guidance in the manual.
+
+## Renderer selection policy
+- Default to `WebGLRenderer` for maximum compatibility and maturity.
+- Use `WebGPURenderer` only when you specifically need TSL / node materials, compute, or advanced WebGPU features.
+- If using `WebGPURenderer`, remember it requires async init (`await renderer.init()`).
+
+## Shader/material policy (TSL over raw GLSL for WebGPU)
+- When using `WebGPURenderer`, use TSL and node-based materials instead of raw GLSL strings or `onBeforeCompile` hacks.
+- Prefer node material classes like:
+  - `MeshBasicNodeMaterial`, `MeshStandardNodeMaterial`, `MeshPhysicalNodeMaterial`, etc.
+
+## Canonical references (use these first)
+Manual topics:
+- Installation: https://threejs.org/manual/#en/installation
+- Creating a Scene: https://threejs.org/manual/#en/creating-a-scene
+- Fundamentals: https://threejs.org/manual/#en/fundamentals
+- Responsive: https://threejs.org/manual/#en/responsive
+- WebGPURenderer: https://threejs.org/manual/#en/webgpurenderer
+
+Essential API entrypoints:
+- Scene graph: https://threejs.org/docs/#api/en/core/Object3D
+- Geometry: https://threejs.org/docs/#api/en/core/BufferGeometry
+- Cameras: https://threejs.org/docs/#api/en/cameras/PerspectiveCamera
+- Renderers:
+  - WebGLRenderer: https://threejs.org/docs/#api/en/renderers/WebGLRenderer
+  - WebGPURenderer: https://threejs.org/docs/#api/en/renderers/webgpu/WebGPURenderer
+- Materials:
+  - MeshStandardMaterial: https://threejs.org/docs/#api/en/materials/MeshStandardMaterial
+  - MeshPhysicalMaterial: https://threejs.org/docs/#api/en/materials/MeshPhysicalMaterial
+- Loaders:
+  - GLTFLoader: https://threejs.org/docs/#examples/en/loaders/GLTFLoader
+- Controls:
+  - OrbitControls: https://threejs.org/docs/#examples/en/controls/OrbitControls
+
+TSL:
+- TSL specification: https://threejs.org/docs/#api/en/nodes/TSL
+
+## Definition of done (Three.js tasks)
+A Three.js change is only “done” if:
+- It follows the renderer/import/shader policies above, AND
+- Any non-obvious API usage is traceable to a Three.js doc URL, AND
+- The code compiles/runs without relying on deprecated patterns.
+
 ---
 # Source: design.md
 ---

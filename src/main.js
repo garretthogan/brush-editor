@@ -34,9 +34,13 @@ import {
 import { generateMaze as generateMazeGrid } from './lib/maze-generator.js'
 import { generateArena as generateArenaGrid } from './lib/arena-generator.js'
 import { createInputHandler } from './lib/input-commands.js'
+import { ADDITION, SUBTRACTION, INTERSECTION, Brush, Evaluator } from 'three-bvh-csg'
 
 const GRID_COLOR = 0x333333
 const OUTLINE_COLOR = 0xff8800
+
+/** CSG operation keys for UI and serialization. See https://github.com/gkjohnson/three-bvh-csg */
+const CSG_OP_VALUES = { ADDITION, SUBTRACTION, INTERSECTION }
 /** 1 scene unit = 1 meter = this many cm. Length controls use cm; divide by this to get units. */
 const CM_PER_UNIT = 100
 let useLitMaterials = false
@@ -121,6 +125,141 @@ transformControls.addEventListener('change', () => {
 // --- Brush State ---
 const brushes = []
 let selectedBrush = null
+/** Default CSG operation key for newly placed brushes: 'ADDITION' | 'SUBTRACTION' | 'INTERSECTION'. */
+let defaultCsgOperationKey = 'ADDITION'
+/** Shared evaluator for CSG; combines brushes with add/subtract/intersect. */
+const csgEvaluator = new Evaluator()
+/** Combined mesh from evaluating all CSG brushes; null when not computed. */
+let csgResultMesh = null
+
+function getCsgOperationConstant(key) {
+  return CSG_OP_VALUES[key] ?? ADDITION
+}
+
+/**
+ * Compute combined CSG result from box/cylinder brushes.
+ * Base = union of (non-user CSG brushes near the subtract/intersect ops) + user ADDITION; then SUBTRACTION; then INTERSECTION.
+ * Non-user brushes are limited to those intersecting the subtract/intersect AABB to avoid hanging on large mazes.
+ */
+function updateCsgResult() {
+  const allCsg = brushes.filter(isCsgBrush)
+  const csgBrushes = allCsg.filter((b) => b.userData.isUserBrush === true)
+  const nonUserCsgBrushes = allCsg.filter((b) => !b.userData.isUserBrush)
+
+  if (csgResultMesh) {
+    scene.remove(csgResultMesh)
+    csgResultMesh.geometry?.dispose?.()
+    if (csgResultMesh.material) {
+      csgResultMesh.material.map?.dispose?.()
+      csgResultMesh.material.dispose?.()
+    }
+    csgResultMesh = null
+  }
+
+  const userAdditions = csgBrushes.filter((b) => (b.userData.csgOperation ?? 'ADDITION') === 'ADDITION')
+  const subtractions = csgBrushes.filter((b) => (b.userData.csgOperation ?? 'ADDITION') === 'SUBTRACTION')
+  const intersections = csgBrushes.filter((b) => (b.userData.csgOperation ?? 'ADDITION') === 'INTERSECTION')
+
+  const restoreAllCsgVisibility = () => {
+    allCsg.forEach((b) => {
+      b.visible = true
+      if (b.material) b.material.visible = true
+    })
+  }
+
+  if (subtractions.length === 0 && intersections.length === 0) {
+    restoreAllCsgVisibility()
+    return
+  }
+
+  // Limit non-user base to brushes that intersect the subtract/intersect region (avoid unioning entire maze = hang + wrong texture)
+  const opBrushes = [...subtractions, ...intersections]
+  const opBox = new THREE.Box3()
+  for (const b of opBrushes) {
+    opBox.union(getBrushWorldBox(b))
+  }
+  opBox.expandByScalar(0.01)
+  const nearNonUser = nonUserCsgBrushes.filter(
+    (b) =>
+      opBox.intersectsBox(getBrushWorldBox(b)) &&
+      b.userData?.subtype !== 'maze-floor' &&
+      b.userData?.subtype !== 'arena-floor'
+  )
+  const baseCandidates = [...nearNonUser, ...userAdditions]
+
+  if (baseCandidates.length === 0) {
+    restoreAllCsgVisibility()
+    return
+  }
+
+  if (baseCandidates.length > 20) {
+    showToast('Computing CSG…', { type: 'info' })
+  }
+
+  try {
+    csgEvaluator.useGroups = false
+    allCsg.forEach((b) => b.updateMatrixWorld(true))
+
+    let result = null
+    for (const brush of baseCandidates) {
+      if (result === null) {
+        result = csgEvaluator.evaluate(brush, brush, ADDITION)
+      } else {
+        result = csgEvaluator.evaluate(result, brush, ADDITION)
+      }
+    }
+    for (const brush of subtractions) {
+      result = csgEvaluator.evaluate(result, brush, SUBTRACTION)
+    }
+    for (const brush of intersections) {
+      result = csgEvaluator.evaluate(result, brush, INTERSECTION)
+    }
+
+  const hasValidGeometry =
+    result?.geometry?.attributes?.position && result.geometry.attributes.position.count > 0
+  if (!result || !hasValidGeometry) {
+    restoreAllCsgVisibility()
+    return
+  }
+
+  // Result may use drawRange; ensure full geometry is drawn (https://github.com/gkjohnson/three-bvh-csg)
+  const geom = result.geometry
+  if (geom.drawRange && geom.attributes.position) {
+    geom.drawRange.start = 0
+    geom.drawRange.count = geom.index ? geom.index.count : geom.attributes.position.count
+  }
+
+  // Prefer wall texture so the combined result is not painted with floor texture
+  const textureSource =
+    baseCandidates.find(
+      (b) => b.userData?.subtype === 'maze-wall' || b.userData?.subtype === 'arena-obstacle'
+    ) ?? baseCandidates[0]
+  const textureInfo = textureSource
+    ? (textureSource.userData?.textureKey
+        ? { key: textureSource.userData.textureKey }
+        : { index: textureSource.userData?.textureIndex })
+    : null
+  const texture = resolveBrushTexture(resolveBrushTextureInfo(textureInfo))
+  result.material = createBrushMaterial(texture, 0, useLitMaterials)
+  result.material.visible = true
+
+  result.castShadow = useLitMaterials
+  result.receiveShadow = useLitMaterials
+  result.visible = true
+  csgResultMesh = result
+  scene.add(csgResultMesh)
+
+  const csgParticipating = new Set([...baseCandidates, ...subtractions, ...intersections])
+  allCsg.forEach((b) => {
+    b.visible = true
+    if (b.material) {
+      b.material.visible = !csgParticipating.has(b)
+    }
+  })
+  } catch (_) {
+    restoreAllCsgVisibility()
+  }
+}
 let currentTool = 'select'
 let arenaPreview = null
 let mazePreview = null
@@ -184,6 +323,24 @@ function updateLevelBuilderTypeSelect(type) {
   const levelBuilderTypeSelect = document.getElementById('level-builder-type')
   if (!levelBuilderTypeSelect) return
   if (LEVEL_BUILDER_VOLUME_TYPES.has(type)) levelBuilderTypeSelect.value = type
+}
+
+function isCsgBrush(mesh) {
+  return mesh && (mesh.userData?.type === 'box' || mesh.userData?.type === 'cylinder')
+}
+
+function updateCsgOperationSelect() {
+  const el = document.getElementById('csg-operation-select')
+  if (!el) return
+  const isUserCsg = selectedBrush && isCsgBrush(selectedBrush) && selectedBrush.userData.isUserBrush
+  const key = isUserCsg ? (selectedBrush.userData.csgOperation ?? defaultCsgOperationKey) : defaultCsgOperationKey
+  if (CSG_OP_VALUES[key] !== undefined) el.value = key
+
+  const includeRow = document.getElementById('csg-include-row')
+  if (includeRow) {
+    const canInclude = selectedBrush && isCsgBrush(selectedBrush) && !selectedBrush.userData.isUserBrush
+    includeRow.style.display = canInclude ? '' : 'none'
+  }
 }
 
 function getRequestedLevelBuilderType() {
@@ -358,13 +515,14 @@ function createBrushMesh(size = [2, 2, 2], position = [0, 1, 0], depthBias = 0, 
   const resolvedInfo = resolveBrushTextureInfo(textureInfo)
   const texture = resolveBrushTexture(resolvedInfo)
   const material = createBrushMaterial(texture, depthBias, useLitMaterials)
-  const mesh = new THREE.Mesh(geometry, material)
+  const mesh = new Brush(geometry, material)
   mesh.position.set(...position)
   mesh.castShadow = useLitMaterials
   mesh.receiveShadow = useLitMaterials
   mesh.userData.isBrush = true
   mesh.userData.type = 'box'
   mesh.userData.size = [...size]
+  mesh.userData.csgOperation = 'ADDITION'
   if (resolvedInfo.key) mesh.userData.textureKey = resolvedInfo.key
   if (typeof resolvedInfo.index === 'number') mesh.userData.textureIndex = resolvedInfo.index
   return mesh
@@ -376,7 +534,7 @@ function createCylinderMesh(radius = 1, height = 2, position = [0, 1, 0], depthB
   const resolvedInfo = resolveBrushTextureInfo(textureInfo)
   const texture = resolveBrushTexture(resolvedInfo)
   const material = createBrushMaterial(texture, depthBias, useLitMaterials)
-  const mesh = new THREE.Mesh(geometry, material)
+  const mesh = new Brush(geometry, material)
   mesh.position.set(...position)
   mesh.castShadow = useLitMaterials
   mesh.receiveShadow = useLitMaterials
@@ -384,6 +542,7 @@ function createCylinderMesh(radius = 1, height = 2, position = [0, 1, 0], depthB
   mesh.userData.type = 'cylinder'
   mesh.userData.radius = radius
   mesh.userData.height = height
+  mesh.userData.csgOperation = 'ADDITION'
   if (resolvedInfo.key) mesh.userData.textureKey = resolvedInfo.key
   if (typeof resolvedInfo.index === 'number') mesh.userData.textureIndex = resolvedInfo.index
   return mesh
@@ -2719,6 +2878,8 @@ function selectBrush(mesh) {
     transformControlsHelper.visible = false
     if (editorMode === 'level-builder') updateLevelBuilderControlPanels()
   }
+  updateCsgOperationSelect()
+  updateCsgResult()
   renderLevelBuilderEntitiesList()
   updateHeaderRefreshButtonState()
 }
@@ -2778,11 +2939,13 @@ function cloneBrush(mesh) {
   }
   clone.userData.id = clone.userData.id ?? crypto.randomUUID()
   clone.userData.isUserBrush = true
+  if (isCsgBrush(mesh) && mesh.userData.csgOperation) clone.userData.csgOperation = mesh.userData.csgOperation
   clone.position.fromArray(position)
   clone.rotation.fromArray(rotation)
   scene.add(clone)
   brushes.push(clone)
   updateSceneList()
+  updateCsgResult()
   return clone
 }
 
@@ -2805,6 +2968,7 @@ function deleteSelected() {
   selectedBrush.material.dispose()
   selectBrush(null)
   updateSceneList()
+  updateCsgResult()
   showToast('Object removed.', {
     type: 'undo',
     recoveryLabel: 'Undo',
@@ -3060,6 +3224,8 @@ function serializeLevel() {
       } else if (m.userData.size) {
         base.size = [...m.userData.size]
       }
+      if (isCsgBrush(m) && m.userData.csgOperation) base.csgOperation = m.userData.csgOperation
+      if (m.userData.isUserBrush === true) base.isUserBrush = true
       return base
     }),
     lights: lights.map((entry) => {
@@ -3147,6 +3313,10 @@ function deserializeLevel(data) {
       )
     }
     mesh.userData.id = b.id || crypto.randomUUID()
+    if (isCsgBrush(mesh) && b.csgOperation && CSG_OP_VALUES[b.csgOperation] !== undefined) {
+      mesh.userData.csgOperation = b.csgOperation
+    }
+    if (b.isUserBrush === true) mesh.userData.isUserBrush = true
     mesh.position.fromArray(
       b.position ?? (b.type === 'ramp' || b.type === 'player_start' ? [0, 0, 0] : [0, 1, 0])
     )
@@ -3227,6 +3397,7 @@ function deserializeLevel(data) {
   selectBrush(null)
   selectLight(null)
   updateSceneList()
+  updateCsgResult()
 }
 
 async function saveLevel() {
@@ -3538,6 +3709,18 @@ document.getElementById('level-builder-type')?.addEventListener('change', () => 
   updateLevelBuilderControlPanels()
 })
 
+document.getElementById('csg-operation-select')?.addEventListener('change', (e) => {
+  const key = e.target.value
+  if (CSG_OP_VALUES[key] === undefined) return
+  if (isCsgBrush(selectedBrush) && selectedBrush.userData.isUserBrush) {
+    selectedBrush.userData.csgOperation = key
+  } else {
+    defaultCsgOperationKey = key
+  }
+  updateCsgResult()
+})
+updateCsgOperationSelect()
+
 // --- Collapsible controls area ---
 const controlsArea = document.getElementById('controls-area')
 const controlsAreaToggle = document.getElementById('controls-area-toggle')
@@ -3706,10 +3889,11 @@ if (outlineWidthInput) {
 }
 
 // --- Fly movement (WASD + mouse look) ---
-// On Windows: right-click to look (common editor convention). On Mac: left-click.
-const LOOK_BUTTON = /Win/i.test(navigator.platform) ? 2 : 0
+// Left-click (0) or right-click (2) on the scene to enter pointer lock and fly; release to exit.
+const FLY_BUTTONS = [0, 2]
 const flyKeys = { w: false, a: false, s: false, d: false, q: false, e: false }
 let flyMouseDown = false
+let lookButtonHeld = null
 let lastFlyTime = performance.now()
 let isLooking = false
 let lookYaw = camera.rotation.y
@@ -3732,17 +3916,18 @@ function shouldIgnoreKeyInput() {
 }
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (e.button === LOOK_BUTTON) {
-    flyMouseDown = true
-    if (!isTransformDragging) {
-      lockElement.requestPointerLock?.()
-    }
+  if (!FLY_BUTTONS.includes(e.button)) return
+  flyMouseDown = true
+  lookButtonHeld = e.button
+  if (!isTransformDragging) {
+    lockElement.requestPointerLock?.()
   }
 })
 
 document.addEventListener('pointerup', (e) => {
-  if (e.button === LOOK_BUTTON) {
+  if (e.button === lookButtonHeld) {
     flyMouseDown = false
+    lookButtonHeld = null
     document.exitPointerLock?.()
   }
   lastLookX = null
@@ -3751,6 +3936,7 @@ document.addEventListener('pointerup', (e) => {
 
 document.addEventListener('pointercancel', () => {
   flyMouseDown = false
+  lookButtonHeld = null
   document.exitPointerLock?.()
   lastLookX = null
   lastLookY = null
@@ -3762,14 +3948,14 @@ renderer.domElement.addEventListener('contextmenu', (e) => {
 
 document.addEventListener('pointerlockchange', () => {
   isLooking = document.pointerLockElement === lockElement
+  orbitControls.enabled = !isLooking
   if (isLooking) {
     lookYaw = camera.rotation.y
     lookPitch = camera.rotation.x
   }
 })
 
-renderer.domElement.addEventListener('pointermove', (e) => {
-  updateRampCursorPreview(e.clientX, e.clientY)
+function handlePointerMoveForLook(e) {
   if (!isLooking) return
   const dx = e.movementX ?? 0
   const dy = e.movementY ?? 0
@@ -3781,7 +3967,13 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   camera.rotation.y = lookYaw
   camera.rotation.x = lookPitch
   updateLookTarget()
+}
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  updateRampCursorPreview(e.clientX, e.clientY)
+  handlePointerMoveForLook(e)
 })
+document.addEventListener('pointermove', handlePointerMoveForLook)
 
 document.addEventListener('keydown', (e) => {
   if (shouldIgnoreKeyInput()) return
@@ -3883,6 +4075,7 @@ const inputHandler = createInputHandler({
   transformControls,
   orbitControls,
   bakeScaleIntoGeometry,
+  onBrushTransformEnd: () => updateCsgResult(),
   pickBrush,
   isGizmoHit,
   pickLight,
@@ -4123,6 +4316,16 @@ document.getElementById('btn-move').addEventListener('click', () => inputHandler
 document.getElementById('btn-rotate').addEventListener('click', () => inputHandler.setTransformMode('rotate'))
 document.getElementById('btn-scale').addEventListener('click', () => inputHandler.setTransformMode('scale'))
 document.getElementById('btn-delete').addEventListener('click', () => inputHandler.deleteSelected())
+
+document.getElementById('btn-include-in-csg')?.addEventListener('click', () => {
+  if (!selectedBrush || !isCsgBrush(selectedBrush) || selectedBrush.userData.isUserBrush) return
+  selectedBrush.userData.isUserBrush = true
+  selectedBrush.userData.csgOperation = selectedBrush.userData.csgOperation ?? defaultCsgOperationKey
+  updateCsgOperationSelect()
+  updateCsgResult()
+  updateSceneList()
+  showToast('Mesh is now included in CSG. Use CSG mode to Add, Subtract, or Intersect.')
+})
 document.getElementById('btn-generate-maze').addEventListener('click', generateMaze)
 document.getElementById('btn-iterate-maze').addEventListener('click', regenerateMazeFromLast)
 document.getElementById('btn-save').addEventListener('click', () => saveLevel())
