@@ -579,11 +579,21 @@
           <div class="modal-body">
             <div class="modal-instructions">Select the objects and lights to export.</div>
             <div id="export-list" class="export-list"></div>
+            <label class="export-option">
+              <input type="checkbox" id="export-bake-csg" checked />
+              <span>Bake CSG into one mesh (for use in other apps; uncheck to re-import into editor with all brushes)</span>
+            </label>
           </div>
           <div class="modal-actions">
             <button id="btn-export-cancel" type="button">Cancel</button>
             <button id="btn-export-confirm" type="button" class="primary">Export</button>
           </div>
+        </div>
+      </div>
+      <div id="import-loading-overlay" class="floor-plan-loading-overlay" hidden role="status" aria-live="polite" aria-label="Loading level">
+        <div class="floor-plan-loading-card">
+          <div class="floor-plan-loading-spinner" aria-hidden="true"></div>
+          <p>Loading level…</p>
         </div>
       </div>
       <div id="entity-picker-overlay" class="entity-picker-overlay" hidden>

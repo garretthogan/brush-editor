@@ -89,6 +89,19 @@ const {
   transformControlsHelper,
 } = initScene({ gridColor: GRID_COLOR })
 
+// Prevent InvalidStateError when controls call setPointerCapture after pointer lock/file dialog
+;(function patchSetPointerCapture(el) {
+  if (!el?.setPointerCapture) return
+  const orig = el.setPointerCapture.bind(el)
+  el.setPointerCapture = function (pointerId) {
+    try {
+      orig(pointerId)
+    } catch (err) {
+      if (err?.name !== 'InvalidStateError') throw err
+    }
+  }
+})(renderer.domElement)
+
 // Lighting
 const ambient = new THREE.AmbientLight(0x404040, 1)
 scene.add(ambient)
@@ -170,13 +183,18 @@ let defaultCsgOperationKey = 'ADDITION'
 const csgEvaluator = new Evaluator()
 /** Combined mesh from evaluating all CSG brushes; null when not computed. */
 let csgResultMesh = null
+/** Brushes that are part of the current CSG result (hidden when result mesh is shown). Used by export to include non-participating brushes when baking. */
+let csgParticipatingBrushes = new Set()
 
 /**
  * Compute combined CSG result from box/cylinder brushes.
  * Base = union of (non-user CSG brushes near the subtract/intersect ops) + user ADDITION; then SUBTRACTION; then INTERSECTION.
  * Non-user brushes are limited to those intersecting the subtract/intersect AABB to avoid hanging on large mazes.
  */
-function updateCsgResult() {
+/**
+ * @param {() => void} [onComplete] - Called when the CSG result has been applied (sync or after deferred work). Used by import to hide loading spinner only after the maze is visible.
+ */
+function updateCsgResult(onComplete) {
   if (csgResultMesh) {
     scene.remove(csgResultMesh)
     csgResultMesh.geometry?.dispose?.()
@@ -187,23 +205,40 @@ function updateCsgResult() {
     csgResultMesh = null
   }
 
-  const { resultMesh, restoreVisibility } = evaluateCsg({
-    brushes,
-    isCsgBrush,
-    getBrushWorldBox,
-    evaluator: csgEvaluator,
-    createBrushMaterial,
-    resolveBrushTexture,
-    resolveBrushTextureInfo,
-    useLitMaterials,
-    showToast,
-  })
-
-  if (resultMesh) {
-    csgResultMesh = resultMesh
-    scene.add(csgResultMesh)
+  function applyResult(out) {
+    const { resultMesh, restoreVisibility, csgParticipating } = out
+    csgParticipatingBrushes = csgParticipating ?? new Set()
+    if (resultMesh) {
+      csgResultMesh = resultMesh
+      scene.add(csgResultMesh)
+    }
+    restoreVisibility()
+    onComplete?.()
   }
-  restoreVisibility()
+
+  const out = evaluateCsg(
+    {
+      brushes,
+      isCsgBrush,
+      getBrushWorldBox,
+      evaluator: csgEvaluator,
+      createBrushMaterial,
+      resolveBrushTexture,
+      resolveBrushTextureInfo,
+      useLitMaterials,
+      showToast,
+    },
+    applyResult
+  )
+  if (out) {
+    applyResult(out)
+  } else {
+    // Deferred: we removed the old result mesh but new one isn't ready yet; show all brushes so the maze stays visible
+    brushes.filter(isCsgBrush).forEach((b) => {
+      b.visible = true
+      if (b.material) b.material.visible = true
+    })
+  }
 }
 
 let currentTool = 'select'
@@ -789,7 +824,12 @@ editorModel.subscribe(() => {
   editorView.updateSceneList()
   editorView.updateBrushToolsPanel(editorModel.selectedBrush)
 })
-initExportSystem({ saveGlb })
+initExportSystem({
+  saveGlb,
+  getCsgResultMesh: () => csgResultMesh,
+  getCsgParticipatingSet: () => csgParticipatingBrushes,
+  isCsgBrush,
+})
 
 function updateLightControls() {
   const empty = document.getElementById('light-controls-empty')
@@ -2328,7 +2368,6 @@ function selectBrush(mesh) {
     if (editorMode === 'level-builder') updateLevelBuilderControlPanels()
   }
   updateCsgOperationSelect()
-  updateCsgResult()
   renderLevelBuilderEntitiesList()
   updateHeaderRefreshButtonState()
 }
@@ -2797,6 +2836,7 @@ async function saveLevel() {
   openExportModal()
 }
 
+const importLoadingOverlay = document.getElementById('import-loading-overlay')
 const { addImportedMeshes, loadLevelFromFile } = createImportSystem({
   loadGlbSceneFromFile,
   loadTextureForSpawn,
@@ -2809,6 +2849,10 @@ const { addImportedMeshes, loadLevelFromFile } = createImportSystem({
   getUseLitMaterials: () => useLitMaterials,
   addImportedLight,
   showToast,
+  onBrushesChanged: updateCsgResult,
+  setImportLoading(isLoading) {
+    if (importLoadingOverlay) importLoadingOverlay.hidden = !isLoading
+  },
 })
 
 // --- Mode selector ---
@@ -3325,8 +3369,11 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   if (!FLY_BUTTONS.includes(e.button)) return
   flyMouseDown = true
   lookButtonHeld = e.button
-  if (!isTransformDragging) {
-    lockElement.requestPointerLock?.()
+  if (!isTransformDragging && document.pointerLockElement !== lockElement) {
+    lockElement.requestPointerLock?.()?.catch(() => {
+      flyMouseDown = false
+      lookButtonHeld = null
+    })
   }
 })
 
@@ -3334,7 +3381,9 @@ document.addEventListener('pointerup', (e) => {
   if (e.button === lookButtonHeld) {
     flyMouseDown = false
     lookButtonHeld = null
-    document.exitPointerLock?.()
+    if (document.pointerLockElement === lockElement) {
+      document.exitPointerLock?.()
+    }
   }
   lastLookX = null
   lastLookY = null
@@ -3343,7 +3392,9 @@ document.addEventListener('pointerup', (e) => {
 document.addEventListener('pointercancel', () => {
   flyMouseDown = false
   lookButtonHeld = null
-  document.exitPointerLock?.()
+  if (document.pointerLockElement === lockElement) {
+    document.exitPointerLock?.()
+  }
   lastLookX = null
   lastLookY = null
 })

@@ -42,9 +42,10 @@ export function getBrushWorldBox(mesh) {
  *   useLitMaterials: boolean,
  *   showToast: (msg: string | { type: string }) => void,
  * }} options
- * @returns {{ resultMesh: THREE.Mesh | null, restoreVisibility: () => void }}
+ * @param {(result: { resultMesh: THREE.Mesh | null, restoreVisibility: () => void }) => void} [onResult] - If provided and work is deferred (to show toast), result is passed here; otherwise result is returned.
+ * @returns {{ resultMesh: THREE.Mesh | null, restoreVisibility: () => void } | undefined}
  */
-export function evaluateCsg(options) {
+export function evaluateCsg(options, onResult) {
   const {
     brushes,
     isCsgBrush,
@@ -73,7 +74,7 @@ export function evaluateCsg(options) {
   const intersections = csgBrushes.filter((b) => (b.userData.csgOperation ?? 'ADDITION') === 'INTERSECTION')
 
   if (subtractions.length === 0 && intersections.length === 0) {
-    return { resultMesh: null, restoreVisibility: restoreAllCsgVisibility }
+    return { resultMesh: null, restoreVisibility: restoreAllCsgVisibility, csgParticipating: new Set() }
   }
 
   const opBrushes = [...subtractions, ...intersections]
@@ -88,17 +89,16 @@ export function evaluateCsg(options) {
       b.userData?.subtype !== 'maze-floor' &&
       b.userData?.subtype !== 'arena-floor'
   )
-  const baseCandidates = [...nearNonUser, ...userAdditions]
+  const notFloor = (b) =>
+    b.userData?.subtype !== 'maze-floor' && b.userData?.subtype !== 'arena-floor'
+  const baseCandidates = [...nearNonUser, ...userAdditions.filter(notFloor)]
 
   if (baseCandidates.length === 0) {
-    return { resultMesh: null, restoreVisibility: restoreAllCsgVisibility }
+    return { resultMesh: null, restoreVisibility: restoreAllCsgVisibility, csgParticipating: new Set() }
   }
 
-  if (baseCandidates.length > 20) {
-    showToast('Computing CSG…', { type: 'info' })
-  }
-
-  try {
+  const runHeavyWork = () => {
+    try {
     evaluator.useGroups = false
     allCsg.forEach((b) => b.updateMatrixWorld(true))
 
@@ -120,7 +120,7 @@ export function evaluateCsg(options) {
     const hasValidGeometry =
       result?.geometry?.attributes?.position && result.geometry.attributes.position.count > 0
     if (!result || !hasValidGeometry) {
-      return { resultMesh: null, restoreVisibility: restoreAllCsgVisibility }
+      return { resultMesh: null, restoreVisibility: restoreAllCsgVisibility, csgParticipating: new Set() }
     }
 
     const geom = result.geometry
@@ -154,8 +154,24 @@ export function evaluateCsg(options) {
         }
       })
     }
-    return { resultMesh: result, restoreVisibility }
-  } catch (_) {
-    return { resultMesh: null, restoreVisibility: restoreAllCsgVisibility }
+    return { resultMesh: result, restoreVisibility, csgParticipating }
+    } catch (_) {
+      return { resultMesh: null, restoreVisibility: restoreAllCsgVisibility, csgParticipating: new Set() }
+    }
   }
+
+  if (baseCandidates.length > 20) {
+    showToast('Computing CSG…', { type: 'info' })
+    if (onResult) {
+      // Wait for next paint (toast is in DOM), then run heavy work in following task
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          onResult(runHeavyWork())
+        }, 0)
+      })
+      return undefined
+    }
+  }
+
+  return runHeavyWork()
 }

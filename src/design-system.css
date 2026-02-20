@@ -1206,6 +1206,15 @@ body.tui .export-label {
   color: var(--tui-fg);
 }
 
+body.tui .export-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--tui-gap);
+  margin-top: var(--tui-pad-1);
+  color: var(--tui-fg);
+  cursor: pointer;
+}
+
 /* Optional: left-side overlay controls (e.g. art-grid style) */
 body.tui #app.app-layout-row #controls-area {
   bottom: auto;

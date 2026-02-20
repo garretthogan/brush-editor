@@ -1,9 +1,15 @@
 import { buildExportEntries } from './ui-panels.js'
 
 let _saveGlb = null
+let _getCsgResultMesh = null
+let _getCsgParticipatingSet = null
+let _isCsgBrush = null
 
-export function initExportSystem({ saveGlb }) {
+export function initExportSystem({ saveGlb, getCsgResultMesh, getCsgParticipatingSet, isCsgBrush }) {
   _saveGlb = saveGlb
+  _getCsgResultMesh = getCsgResultMesh ?? (() => null)
+  _getCsgParticipatingSet = getCsgParticipatingSet ?? (() => new Set())
+  _isCsgBrush = isCsgBrush ?? (() => false)
 }
 
 export function openExportModal() {
@@ -106,9 +112,45 @@ export function openExportModal() {
     })
     close()
     if (selected.length === 0) return
-    if (_saveGlb) {
-      await _saveGlb(selected, { filename: 'level.glb' })
+    if (!_saveGlb) return
+
+    const bakeCsg = document.getElementById('export-bake-csg')?.checked === true
+    let objectsToExport = selected
+
+    if (bakeCsg) {
+      const resultMesh = _getCsgResultMesh?.() ?? null
+      const participating = _getCsgParticipatingSet?.() ?? new Set()
+      const hasSelectedCsgBrush = selected.some((obj) => _isCsgBrush(obj))
+      objectsToExport = []
+      if (resultMesh && hasSelectedCsgBrush) {
+        objectsToExport.push(resultMesh)
+      }
+      // Add brushes that did not participate in the result (rest of maze) so the full level is in the file
+      selected.forEach((obj) => {
+        if (_isCsgBrush(obj)) {
+          if (participating.has(obj)) {
+            // Already represented by the baked result mesh
+          } else if (
+            obj.userData?.csgOperation === 'SUBTRACTION' ||
+            obj.userData?.csgOperation === 'INTERSECTION'
+          ) {
+            // Never export subtractive/intersection as solid meshes when bake requested
+          } else {
+            objectsToExport.push(obj)
+          }
+        } else {
+          objectsToExport.push(obj)
+        }
+      })
+      // Safety: never include subtractive/intersection brushes when bake requested (other apps can't do CSG)
+      objectsToExport = objectsToExport.filter(
+        (obj) =>
+          !_isCsgBrush(obj) ||
+          (obj.userData?.csgOperation !== 'SUBTRACTION' && obj.userData?.csgOperation !== 'INTERSECTION')
+      )
     }
+
+    await _saveGlb(objectsToExport, { filename: 'level.glb' })
   }
 
   confirm?.addEventListener('click', onConfirm, { once: true })

@@ -606,6 +606,21 @@ body {
   color: #e0e0e0;
 }
 
+.export-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: #e0e0e0;
+  cursor: pointer;
+}
+
+.export-option input {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+}
+
 #panel-maze-settings,
 #panel-arena-settings,
 #panel-skybox-settings {
