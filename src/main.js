@@ -9,6 +9,8 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { loadGlbSceneFromFile, saveGlb } from './lib/glb-io.js'
 import { initUIPanels, updateSceneList } from './lib/ui-panels.js'
+import { EditorView } from './editor/EditorView.js'
+import { EditorController } from './editor/EditorController.js'
 import { initExportSystem, openExportModal } from './lib/export-glb.js'
 import { createImportSystem } from './lib/import-glb.js'
 import { setState } from './lib/state.js'
@@ -34,16 +36,38 @@ import {
 import { generateMaze as generateMazeGrid } from './lib/maze-generator.js'
 import { generateArena as generateArenaGrid } from './lib/arena-generator.js'
 import { createInputHandler } from './lib/input-commands.js'
-import { ADDITION, SUBTRACTION, INTERSECTION, Brush, Evaluator } from 'three-bvh-csg'
+import { EntityRegistry } from './ecs/EntityRegistry.js'
+import { isCsgBrush, isLevelBuilderVolume, LEVEL_BUILDER_VOLUME_TYPES } from './ecs/queries.js'
+import { EditorModel } from './editor/EditorModel.js'
+import { Evaluator } from 'three-bvh-csg'
+import { ADDITION, SUBTRACTION, INTERSECTION, CSG_OP_VALUES, getCsgOperationConstant, getBrushWorldBox, evaluateCsg } from './lib/csg.js'
+import { createOutlineSystem } from './lib/outline.js'
+import {
+  createPointLightHelper,
+  createSpotLightHelper,
+  createDirectionalLightHelper,
+  createAmbientLightHelper,
+  updateLightHelperColor,
+  updateLightDirectionFromRotation,
+  applyLightScaleToDistance,
+} from './lib/light-helpers.js'
+import { createUndoStack } from './lib/undo.js'
+import { serializeLevelData, parseLevelData, getSkyboxState, setSkyboxState } from './lib/serialize-level.js'
+import { createRampCreator } from './lib/ramp-tool.js'
+import {
+  setBoxUVs,
+  setCylinderUVs,
+  createBrushMesh,
+  createCylinderMesh,
+  createPlayerStartMesh,
+} from './lib/brush-mesh.js'
 
 const GRID_COLOR = 0x333333
 const OUTLINE_COLOR = 0xff8800
-
-/** CSG operation keys for UI and serialization. See https://github.com/gkjohnson/three-bvh-csg */
-const CSG_OP_VALUES = { ADDITION, SUBTRACTION, INTERSECTION }
 /** 1 scene unit = 1 meter = this many cm. Length controls use cm; divide by this to get units. */
 const CM_PER_UNIT = 100
 let useLitMaterials = false
+let outlineWidth = 2
 const baseUrl = import.meta.env.BASE_URL
 
 function clamp(value, min, max) {
@@ -92,6 +116,15 @@ setState({
   transformControls,
 })
 
+const { addOutline, removeOutline, refreshOutline, setOutlineResolution } = createOutlineSystem({
+  LineSegments2,
+  LineSegmentsGeometry,
+  LineMaterial,
+  color: OUTLINE_COLOR,
+  getOutlineWidth: () => outlineWidth,
+  getViewport: () => viewport,
+})
+
 let isTransformDragging = false
 
 transformControls.addEventListener('dragging-changed', (e) => {
@@ -117,12 +150,18 @@ transformControls.addEventListener('change', () => {
   const mode = transformControls.getMode()
   if (mode === 'rotate') {
     updateLightDirectionFromRotation(selectedLight)
+    updateSpotLightHelpers()
+    updateDirectionalLightHelpers()
+    updateLightControls()
   } else if (mode === 'scale') {
-    applyLightScaleToDistance(selectedLight)
+    applyLightScaleToDistance(selectedLight, lightTransformState.baseDistance)
+    updateLightControls()
   }
 })
 
 // --- Brush State ---
+const entityRegistry = new EntityRegistry()
+const editorModel = new EditorModel()
 const brushes = []
 let selectedBrush = null
 /** Default CSG operation key for newly placed brushes: 'ADDITION' | 'SUBTRACTION' | 'INTERSECTION'. */
@@ -132,20 +171,12 @@ const csgEvaluator = new Evaluator()
 /** Combined mesh from evaluating all CSG brushes; null when not computed. */
 let csgResultMesh = null
 
-function getCsgOperationConstant(key) {
-  return CSG_OP_VALUES[key] ?? ADDITION
-}
-
 /**
  * Compute combined CSG result from box/cylinder brushes.
  * Base = union of (non-user CSG brushes near the subtract/intersect ops) + user ADDITION; then SUBTRACTION; then INTERSECTION.
  * Non-user brushes are limited to those intersecting the subtract/intersect AABB to avoid hanging on large mazes.
  */
 function updateCsgResult() {
-  const allCsg = brushes.filter(isCsgBrush)
-  const csgBrushes = allCsg.filter((b) => b.userData.isUserBrush === true)
-  const nonUserCsgBrushes = allCsg.filter((b) => !b.userData.isUserBrush)
-
   if (csgResultMesh) {
     scene.remove(csgResultMesh)
     csgResultMesh.geometry?.dispose?.()
@@ -156,110 +187,25 @@ function updateCsgResult() {
     csgResultMesh = null
   }
 
-  const userAdditions = csgBrushes.filter((b) => (b.userData.csgOperation ?? 'ADDITION') === 'ADDITION')
-  const subtractions = csgBrushes.filter((b) => (b.userData.csgOperation ?? 'ADDITION') === 'SUBTRACTION')
-  const intersections = csgBrushes.filter((b) => (b.userData.csgOperation ?? 'ADDITION') === 'INTERSECTION')
-
-  const restoreAllCsgVisibility = () => {
-    allCsg.forEach((b) => {
-      b.visible = true
-      if (b.material) b.material.visible = true
-    })
-  }
-
-  if (subtractions.length === 0 && intersections.length === 0) {
-    restoreAllCsgVisibility()
-    return
-  }
-
-  // Limit non-user base to brushes that intersect the subtract/intersect region (avoid unioning entire maze = hang + wrong texture)
-  const opBrushes = [...subtractions, ...intersections]
-  const opBox = new THREE.Box3()
-  for (const b of opBrushes) {
-    opBox.union(getBrushWorldBox(b))
-  }
-  opBox.expandByScalar(0.01)
-  const nearNonUser = nonUserCsgBrushes.filter(
-    (b) =>
-      opBox.intersectsBox(getBrushWorldBox(b)) &&
-      b.userData?.subtype !== 'maze-floor' &&
-      b.userData?.subtype !== 'arena-floor'
-  )
-  const baseCandidates = [...nearNonUser, ...userAdditions]
-
-  if (baseCandidates.length === 0) {
-    restoreAllCsgVisibility()
-    return
-  }
-
-  if (baseCandidates.length > 20) {
-    showToast('Computing CSG…', { type: 'info' })
-  }
-
-  try {
-    csgEvaluator.useGroups = false
-    allCsg.forEach((b) => b.updateMatrixWorld(true))
-
-    let result = null
-    for (const brush of baseCandidates) {
-      if (result === null) {
-        result = csgEvaluator.evaluate(brush, brush, ADDITION)
-      } else {
-        result = csgEvaluator.evaluate(result, brush, ADDITION)
-      }
-    }
-    for (const brush of subtractions) {
-      result = csgEvaluator.evaluate(result, brush, SUBTRACTION)
-    }
-    for (const brush of intersections) {
-      result = csgEvaluator.evaluate(result, brush, INTERSECTION)
-    }
-
-  const hasValidGeometry =
-    result?.geometry?.attributes?.position && result.geometry.attributes.position.count > 0
-  if (!result || !hasValidGeometry) {
-    restoreAllCsgVisibility()
-    return
-  }
-
-  // Result may use drawRange; ensure full geometry is drawn (https://github.com/gkjohnson/three-bvh-csg)
-  const geom = result.geometry
-  if (geom.drawRange && geom.attributes.position) {
-    geom.drawRange.start = 0
-    geom.drawRange.count = geom.index ? geom.index.count : geom.attributes.position.count
-  }
-
-  // Prefer wall texture so the combined result is not painted with floor texture
-  const textureSource =
-    baseCandidates.find(
-      (b) => b.userData?.subtype === 'maze-wall' || b.userData?.subtype === 'arena-obstacle'
-    ) ?? baseCandidates[0]
-  const textureInfo = textureSource
-    ? (textureSource.userData?.textureKey
-        ? { key: textureSource.userData.textureKey }
-        : { index: textureSource.userData?.textureIndex })
-    : null
-  const texture = resolveBrushTexture(resolveBrushTextureInfo(textureInfo))
-  result.material = createBrushMaterial(texture, 0, useLitMaterials)
-  result.material.visible = true
-
-  result.castShadow = useLitMaterials
-  result.receiveShadow = useLitMaterials
-  result.visible = true
-  csgResultMesh = result
-  scene.add(csgResultMesh)
-
-  const csgParticipating = new Set([...baseCandidates, ...subtractions, ...intersections])
-  allCsg.forEach((b) => {
-    b.visible = true
-    if (b.material) {
-      b.material.visible = !csgParticipating.has(b)
-    }
+  const { resultMesh, restoreVisibility } = evaluateCsg({
+    brushes,
+    isCsgBrush,
+    getBrushWorldBox,
+    evaluator: csgEvaluator,
+    createBrushMaterial,
+    resolveBrushTexture,
+    resolveBrushTextureInfo,
+    useLitMaterials,
+    showToast,
   })
-  } catch (_) {
-    restoreAllCsgVisibility()
+
+  if (resultMesh) {
+    csgResultMesh = resultMesh
+    scene.add(csgResultMesh)
   }
+  restoreVisibility()
 }
+
 let currentTool = 'select'
 let arenaPreview = null
 let mazePreview = null
@@ -283,12 +229,6 @@ let lastMazeGroupId = null
 let lastArenaGroupId = null
 let lastMazeArenaGroupId = null
 
-const LEVEL_BUILDER_VOLUME_TYPES = new Set(['maze', 'maze-arena', 'arena'])
-
-function isLevelBuilderVolume(mesh) {
-  return Boolean(mesh?.userData?.isLevelBuilderVolume) && LEVEL_BUILDER_VOLUME_TYPES.has(mesh.userData.levelBuilderType)
-}
-
 function getSelectedLevelBuilderVolume(type = null) {
   if (!isLevelBuilderVolume(selectedBrush)) return null
   if (type && selectedBrush.userData.levelBuilderType !== type) return null
@@ -310,6 +250,8 @@ function getPrimaryLevelBuilderVolume(type) {
 
 function removeLevelBuilderVolume(mesh) {
   if (!isLevelBuilderVolume(mesh)) return
+  const id = mesh.userData?.id
+  if (id) entityRegistry.removeEntity(id)
   const idx = brushes.indexOf(mesh)
   if (idx !== -1) brushes.splice(idx, 1)
   if (selectedBrush === mesh) selectBrush(null)
@@ -323,10 +265,6 @@ function updateLevelBuilderTypeSelect(type) {
   const levelBuilderTypeSelect = document.getElementById('level-builder-type')
   if (!levelBuilderTypeSelect) return
   if (LEVEL_BUILDER_VOLUME_TYPES.has(type)) levelBuilderTypeSelect.value = type
-}
-
-function isCsgBrush(mesh) {
-  return mesh && (mesh.userData?.type === 'box' || mesh.userData?.type === 'cylinder')
 }
 
 function updateCsgOperationSelect() {
@@ -426,137 +364,35 @@ setState({
   lights,
 })
 
-const LIGHT_HELPER_COLOR = 0xffdd88
-const POINT_LIGHT_HELPER_RADIUS = 0.2
-const AMBIENT_LIGHT_HELPER_SIZE = 0.35
-const SPOT_LIGHT_CONE_LENGTH = 1.2
-const SPOT_LIGHT_CONE_RADIUS = 0.35
-const DIRECTIONAL_LIGHT_HELPER_RADIUS = 0.18
-const DIRECTIONAL_LIGHT_HELPER_CONE_LENGTH = 0.9
-const DIRECTIONAL_LIGHT_HELPER_CONE_RADIUS = 0.25
-const LIGHT_BASE_DIRECTION = new THREE.Vector3(0, -1, 0)
 const lightTransformState = {
   baseDistance: null,
 }
 
-// --- Undo Stack ---
-const MAX_UNDO = 50
-const undoStack = []
+// --- Undo Stack (levelUndoStack created after serializeLevel/deserializeLevel) ---
+let levelUndoStack = null
 
 function pushUndoState() {
-  const state = serializeLevel()
-  if (undoStack.length >= MAX_UNDO) undoStack.shift()
-  undoStack.push(JSON.stringify(state))
+  if (levelUndoStack) levelUndoStack.push()
 }
 
 function undo() {
-  if (rampCreatorState.active && rampUndoStack.length > 0) {
-    undoRampPoint()
+  if (rampCreator?.isRampCreatorActive?.() && rampCreator?.hasRampUndo?.()) {
+    rampCreator.undoRampPoint()
     return
   }
-  if (undoStack.length === 0) return
-  const state = JSON.parse(undoStack.pop())
-  deserializeLevel(state)
-}
-
-// Scale cylinder UVs so texture tiles without stretching. Side: u = circumference, v = height. Caps: radial scale by diameter.
-function setCylinderUVs(geometry, radius, height, radialSegments = 16, heightSegments = 1) {
-  const uv = geometry.attributes.uv
-  if (!uv) return
-  const circumference = 2 * Math.PI * radius
-  const torsoCount = (radialSegments + 1) * (heightSegments + 1)
-  // Side (torso)
-  for (let i = 0; i < torsoCount; i++) {
-    const uVal = uv.getX(i)
-    const vVal = uv.getY(i)
-    uv.setXY(i, uVal * circumference, vVal * height)
-  }
-  // Caps (top and bottom): radial UVs centered at (0.5, 0.5), scale by 2*radius for tiling
-  const capScale = 2 * radius
-  const capVertexCount = radialSegments + (radialSegments + 1) // per cap
-  for (let cap = 0; cap < 2; cap++) {
-    const start = torsoCount + cap * (2 * radialSegments + 1)
-    const end = start + 2 * radialSegments + 1
-    for (let i = start; i < end; i++) {
-      const uVal = uv.getX(i)
-      const vVal = uv.getY(i)
-      uv.setXY(i, 0.5 + (uVal - 0.5) * capScale, 0.5 + (vVal - 0.5) * capScale)
-    }
-  }
-  uv.needsUpdate = true
-}
-
-// Scale box UVs per face so texture tiles without stretching. Keeps default UV axes (lines align with edges).
-function setBoxUVs(geometry, sx, sy, sz) {
-  const uv = geometry.attributes.uv
-  if (!uv) return
-  // Face dimensions (width, height) per buildPlane order: px, nx, py, ny, pz, nz
-  const faceDims = [
-    [sz, sy], [sz, sy],   // px, nx: depth×height
-    [sx, sz], [sx, sz],   // py, ny: width×depth
-    [sx, sy], [sx, sy],   // pz, nz: width×height
-  ]
-  for (let f = 0; f < 6; f++) {
-    const [w, h] = faceDims[f]
-    for (let v = 0; v < 4; v++) {
-      const i = f * 4 + v
-      const uVal = uv.getX(i)
-      const vVal = uv.getY(i)
-      // Default UVs: u 0→1, v 1→0. Scale to (0,w) and (0,h) for tiling.
-      uv.setXY(i, uVal * w, vVal * h)
-    }
-  }
-  uv.needsUpdate = true
-}
-
-function createBrushMesh(size = [2, 2, 2], position = [0, 1, 0], depthBias = 0, textureInfo = null) {
-  const geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
-  setBoxUVs(geometry, size[0], size[1], size[2])
-  const resolvedInfo = resolveBrushTextureInfo(textureInfo)
-  const texture = resolveBrushTexture(resolvedInfo)
-  const material = createBrushMaterial(texture, depthBias, useLitMaterials)
-  const mesh = new Brush(geometry, material)
-  mesh.position.set(...position)
-  mesh.castShadow = useLitMaterials
-  mesh.receiveShadow = useLitMaterials
-  mesh.userData.isBrush = true
-  mesh.userData.type = 'box'
-  mesh.userData.size = [...size]
-  mesh.userData.csgOperation = 'ADDITION'
-  if (resolvedInfo.key) mesh.userData.textureKey = resolvedInfo.key
-  if (typeof resolvedInfo.index === 'number') mesh.userData.textureIndex = resolvedInfo.index
-  return mesh
-}
-
-function createCylinderMesh(radius = 1, height = 2, position = [0, 1, 0], depthBias = 0, textureInfo = null) {
-  const geometry = new THREE.CylinderGeometry(radius, radius, height, 16, 1)
-  setCylinderUVs(geometry, radius, height, 16, 1)
-  const resolvedInfo = resolveBrushTextureInfo(textureInfo)
-  const texture = resolveBrushTexture(resolvedInfo)
-  const material = createBrushMaterial(texture, depthBias, useLitMaterials)
-  const mesh = new Brush(geometry, material)
-  mesh.position.set(...position)
-  mesh.castShadow = useLitMaterials
-  mesh.receiveShadow = useLitMaterials
-  mesh.userData.isBrush = true
-  mesh.userData.type = 'cylinder'
-  mesh.userData.radius = radius
-  mesh.userData.height = height
-  mesh.userData.csgOperation = 'ADDITION'
-  if (resolvedInfo.key) mesh.userData.textureKey = resolvedInfo.key
-  if (typeof resolvedInfo.index === 'number') mesh.userData.textureIndex = resolvedInfo.index
-  return mesh
+  if (levelUndoStack) levelUndoStack.undo()
 }
 
 function addFloorBrush() {
   pushUndoState()
   const size = [10, 0.2, 10]
   const position = [0, 0.1, 0]
-  const mesh = createBrushMesh(size, position, brushes.length * 4)
+  const mesh = createBrushMesh(size, position, brushes.length * 4, null, useLitMaterials)
   mesh.userData.id = crypto.randomUUID()
   mesh.userData.isUserBrush = true
   mesh.userData.subtype = 'floor'
   scene.add(mesh)
+  entityRegistry.register(mesh)
   brushes.push(mesh)
   selectBrush(mesh)
   setCurrentTool('translate')
@@ -569,11 +405,12 @@ function addWallBrush() {
   pushUndoState()
   const size = [10, 4, 0.2]
   const position = [0, 2, 0]
-  const mesh = createBrushMesh(size, position, brushes.length * 4)
+  const mesh = createBrushMesh(size, position, brushes.length * 4, null, useLitMaterials)
   mesh.userData.id = crypto.randomUUID()
   mesh.userData.isUserBrush = true
   mesh.userData.subtype = 'wall'
   scene.add(mesh)
+  entityRegistry.register(mesh)
   brushes.push(mesh)
   selectBrush(mesh)
   setCurrentTool('translate')
@@ -587,46 +424,24 @@ function addCylinderBrush() {
   const radius = 1
   const height = 2
   const position = [0, 1, 0]
-  const mesh = createCylinderMesh(radius, height, position, brushes.length * 4)
+  const mesh = createCylinderMesh(radius, height, position, brushes.length * 4, null, useLitMaterials)
   mesh.userData.id = crypto.randomUUID()
   mesh.userData.isUserBrush = true
   scene.add(mesh)
+  entityRegistry.register(mesh)
   brushes.push(mesh)
   selectBrush(mesh)
   setCurrentTool('translate')
   setTransformMode('translate')
   focusCameraOnObject(mesh)
   updateSceneList()
-}
-
-/** Player height in brush-editor units (1 unit = 1 m). Matches occult-shooter PLAYER_HEIGHT_CM (175 cm). */
-const PLAYER_HEIGHT_UNITS = 1.75
-/** Approximate human shoulder width in units (~50 cm). */
-const PLAYER_RADIUS_UNITS = 0.25
-
-function createPlayerStartMesh(position = [0, 0, 0]) {
-  const coneGeom = new THREE.ConeGeometry(PLAYER_RADIUS_UNITS, PLAYER_HEIGHT_UNITS, 12)
-  const material = new THREE.MeshBasicMaterial({
-    color: 0x00aaff,
-    transparent: true,
-    opacity: 0.9,
-  })
-  const mesh = new THREE.Mesh(coneGeom, material)
-  mesh.name = 'player_start'
-  mesh.position.set(...position)
-  mesh.userData.isBrush = true
-  mesh.userData.type = 'player_start'
-  mesh.userData.id = crypto.randomUUID()
-  mesh.userData.isUserBrush = true
-  mesh.castShadow = false
-  mesh.receiveShadow = false
-  return mesh
 }
 
 function addPlayerStartMarker() {
   pushUndoState()
   const mesh = createPlayerStartMesh([0, 0, 0])
   scene.add(mesh)
+  entityRegistry.register(mesh)
   brushes.push(mesh)
   selectBrush(mesh)
   setCurrentTool('translate')
@@ -635,40 +450,11 @@ function addPlayerStartMarker() {
   updateSceneList()
 }
 
-// --- Ramp creator tool (four-point selection: two per end) ---
-const rampCreatorState = { active: false, pointA: null, pointB: null, pointC: null, pointD: null }
-const rampUndoStack = []
-const rampPointMarkers = []
-let rampPreviewMesh = null
-let rampCursorPreview = null
+// --- Ramp: geometry and 3D pick in main; tool UI in lib/ramp-tool.js ---
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 const groundIntersect = new THREE.Vector3()
-
-const RAMP_MARKER_COLORS = { A: 0x00ff00, B: 0x00cc00, C: 0xff8800, D: 0xff6600 }
-function addRampPointMarker(point, label) {
-  const geometry = new THREE.SphereGeometry(0.15, 16, 12)
-  const material = new THREE.MeshBasicMaterial({
-    color: RAMP_MARKER_COLORS[label] ?? 0xffffff,
-    transparent: true,
-    opacity: 0.9,
-  })
-  const mesh = new THREE.Mesh(geometry, material)
-  mesh.position.set(point[0], point[1], point[2])
-  mesh.userData.rampMarker = true
-  mesh.userData.markerLabel = label
-  scene.add(mesh)
-  rampPointMarkers.push(mesh)
-  return mesh
-}
-
-function clearRampPointMarkers() {
-  rampPointMarkers.forEach((m) => {
-    scene.remove(m)
-    m.geometry.dispose()
-    m.material.dispose()
-  })
-  rampPointMarkers.length = 0
-}
+let rampCreatorActive = false
+let rampCreator = null
 
 function computeRampParams(pointA, pointB, rampWidth, scale = 1) {
   const a = new THREE.Vector3(pointA[0], pointA[1], pointA[2])
@@ -729,44 +515,6 @@ function computeRampParamsFrom4Points(pointA, pointB, pointC, pointD, scale = 1)
   }
 }
 
-function updateRampPreview() {
-  if (rampPreviewMesh) {
-    scene.remove(rampPreviewMesh)
-    rampPreviewMesh.geometry.dispose()
-    rampPreviewMesh.material.dispose()
-    rampPreviewMesh = null
-  }
-  if (!rampCreatorState.pointA || !rampCreatorState.pointB || !rampCreatorState.pointC || !rampCreatorState.pointD) return
-  const rampScale = parseFloat(document.getElementById('ramp-scale')?.value ?? '100') / 100
-  const geometry = createRampGeometryFrom4Points(
-    rampCreatorState.pointA,
-    rampCreatorState.pointB,
-    rampCreatorState.pointC,
-    rampCreatorState.pointD,
-    rampScale
-  )
-  const material = new THREE.MeshBasicMaterial({
-    color: 0x4a9eff,
-    transparent: true,
-    opacity: 0.4,
-    side: THREE.DoubleSide,
-    depthWrite: false,
-  })
-  rampPreviewMesh = new THREE.Mesh(geometry, material)
-  rampPreviewMesh.userData.rampPreview = true
-  rampPreviewMesh.renderOrder = -1
-  scene.add(rampPreviewMesh)
-}
-
-function clearRampPreview() {
-  if (rampPreviewMesh) {
-    scene.remove(rampPreviewMesh)
-    rampPreviewMesh.geometry.dispose()
-    rampPreviewMesh.material.dispose()
-    rampPreviewMesh = null
-  }
-}
-
 function getRampSnapSizeCm() {
   const el = document.getElementById('ramp-snap-size')
   if (!el) return 0
@@ -805,7 +553,7 @@ function pickPoint3DFromCoords(clientX, clientY) {
   if (!pt && raycaster.ray.intersectPlane(groundPlane, groundIntersect)) {
     pt = groundIntersect.toArray()
   }
-  if (pt && rampCreatorState.active) {
+  if (pt && rampCreatorActive) {
     const snapCm = getRampSnapSizeCm()
     if (snapCm > 0) pt = snapPointToGrid(pt, snapCm)
   }
@@ -816,259 +564,17 @@ function pickPoint3D(event) {
   return pickPoint3DFromCoords(event.clientX, event.clientY)
 }
 
-function ensureRampCursorPreview() {
-  if (rampCursorPreview) return rampCursorPreview
-  const geometry = new THREE.SphereGeometry(0.12, 12, 8)
-  const material = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.6,
-  })
-  rampCursorPreview = new THREE.Mesh(geometry, material)
-  rampCursorPreview.visible = false
-  rampCursorPreview.userData.rampCursorPreview = true
-  rampCursorPreview.renderOrder = 10
-  rampCursorPreview.material.depthWrite = false
-  scene.add(rampCursorPreview)
-  return rampCursorPreview
-}
-
-function updateRampCursorPreview(clientX, clientY) {
-  if (!rampCreatorState.active) return
-  const preview = ensureRampCursorPreview()
-  const rect = pickRectElement.getBoundingClientRect()
-  if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
-    preview.visible = false
-    return
-  }
-  const pt = pickPoint3DFromCoords(clientX, clientY)
-  if (pt) {
-    preview.position.set(pt[0], pt[1], pt[2])
-    preview.visible = true
-  } else {
-    preview.visible = false
-  }
-}
-
-function hideRampCursorPreview() {
-  if (rampCursorPreview) rampCursorPreview.visible = false
-}
-
-function startRampCreator() {
-  setEditorMode('brush')
-  selectBrush(null)
-  rampCreatorState.active = true
-  rampCreatorState.pointA = null
-  rampCreatorState.pointB = null
-  rampCreatorState.pointC = null
-  rampCreatorState.pointD = null
-  document.getElementById('ramp-creator-panel')?.classList.remove('hidden')
-  document.getElementById('panel-brush-tools')?.closest('.panel')?.classList.remove('collapsed')
-  updateRampCreatorStatus()
-  document.getElementById('btn-ramp-place').disabled = true
-  showToast('Click first point of low end (e.g. left corner).', { type: 'info' })
-}
-
-function undoRampPoint() {
-  if (rampUndoStack.length === 0) return
-  const prev = rampUndoStack.pop()
-  rampCreatorState.pointA = prev.pointA
-  rampCreatorState.pointB = prev.pointB
-  rampCreatorState.pointC = prev.pointC
-  rampCreatorState.pointD = prev.pointD
-  clearRampPointMarkers()
-  if (prev.pointA) addRampPointMarker(prev.pointA, 'A')
-  if (prev.pointB) addRampPointMarker(prev.pointB, 'B')
-  if (prev.pointC) addRampPointMarker(prev.pointC, 'C')
-  if (prev.pointD) addRampPointMarker(prev.pointD, 'D')
-  updateRampPreview()
-  updateRampCreatorStatus()
-  document.getElementById('btn-ramp-place').disabled = !prev.pointA || !prev.pointB || !prev.pointC || !prev.pointD
-  showToast(prev.pointD ? 'Removed point D.' : prev.pointC ? 'Removed point C.' : prev.pointB ? 'Removed point B.' : 'Removed point A.', { type: 'info' })
-}
-
-function cancelRampCreator() {
-  rampCreatorState.active = false
-  rampCreatorState.pointA = null
-  rampCreatorState.pointB = null
-  rampCreatorState.pointC = null
-  rampCreatorState.pointD = null
-  rampUndoStack.length = 0
-  clearRampPointMarkers()
-  clearRampPreview()
-  hideRampCursorPreview()
-  document.getElementById('ramp-creator-panel')?.classList.add('hidden')
-}
-
-function updateRampCreatorStatus() {
-  const status = document.getElementById('ramp-creator-status')
-  if (!status) return
-  const { pointA, pointB, pointC, pointD } = rampCreatorState
-  if (!pointA) {
-    status.textContent = '1/4: Click first point of low end'
-  } else if (!pointB) {
-    status.textContent = '2/4: Click second point of low end'
-  } else if (!pointC) {
-    status.textContent = '3/4: Click first point of high end'
-  } else if (!pointD) {
-    status.textContent = '4/4: Click second point of high end'
-  } else {
-    const rampScale = parseFloat(document.getElementById('ramp-scale')?.value ?? '100') / 100
-    const a = new THREE.Vector3(pointA[0], pointA[1], pointA[2])
-    const b = new THREE.Vector3(pointB[0], pointB[1], pointB[2])
-    const c = new THREE.Vector3(pointC[0], pointC[1], pointC[2])
-    const d = new THREE.Vector3(pointD[0], pointD[1], pointD[2])
-    const lowCenter = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5)
-    const highCenter = new THREE.Vector3().addVectors(c, d).multiplyScalar(0.5)
-    const rampDir = new THREE.Vector3().subVectors(highCenter, lowCenter)
-    const rampRun = Math.sqrt(rampDir.x * rampDir.x + rampDir.z * rampDir.z)
-    const rampRise = rampDir.y
-    const slopeAngleDeg = THREE.MathUtils.radToDeg(Math.atan2(rampRise, rampRun))
-    const runM = (rampRun * CM_PER_UNIT / 100).toFixed(1)
-    const riseM = (rampRise * CM_PER_UNIT / 100).toFixed(1)
-    const lowW = a.distanceTo(b) * CM_PER_UNIT / 100
-    const highW = c.distanceTo(d) * CM_PER_UNIT / 100
-    status.textContent = `Preview: ${lowW.toFixed(1)}–${highW.toFixed(1)}m × ${runM}m run × ${riseM}m rise, ${slopeAngleDeg.toFixed(1)}° slope. Place Ramp.`
-  }
-}
-
-function handleRampCreatorPick(event) {
-  if (event.button !== 0) return
-  if (viewport && !viewport.contains(event.target)) return
-  const pt = pickPoint3D(event)
-  if (!pt) {
-    showToast('Click on the floor, a wall, or the ground to place a point.', { type: 'info' })
-    return
-  }
-  const { pointA, pointB, pointC, pointD } = rampCreatorState
-  if (!pointA) {
-    rampUndoStack.push({ pointA: null, pointB: null, pointC: null, pointD: null })
-    rampCreatorState.pointA = pt
-    addRampPointMarker(pt, 'A')
-    showToast('Low end point 1 (green). Click second point of low end.', { type: 'success' })
-  } else if (!pointB) {
-    rampUndoStack.push({ pointA: [...pointA], pointB: null, pointC: null, pointD: null })
-    rampCreatorState.pointB = pt
-    addRampPointMarker(pt, 'B')
-    showToast('Low end complete. Click first point of high end (orange). Undo to remove last point.', { type: 'success' })
-  } else if (!pointC) {
-    rampUndoStack.push({ pointA: [...pointA], pointB: [...pointB], pointC: null, pointD: null })
-    rampCreatorState.pointC = pt
-    addRampPointMarker(pt, 'C')
-    showToast('High end point 1. Click second point of high end. Undo to remove last point.', { type: 'success' })
-  } else if (!pointD) {
-    rampUndoStack.push({ pointA: [...pointA], pointB: [...pointB], pointC: [...pointC], pointD: null })
-    rampCreatorState.pointD = pt
-    addRampPointMarker(pt, 'D')
-    updateRampPreview()
-    showToast('All 4 points set. Adjust scale or click Place Ramp. Undo to remove last point.', { type: 'success' })
-  } else {
-    rampCreatorState.pointA = pt
-    rampCreatorState.pointB = null
-    rampCreatorState.pointC = null
-    rampCreatorState.pointD = null
-    clearRampPointMarkers()
-    clearRampPreview()
-    addRampPointMarker(pt, 'A')
-    showToast('Reset. Click first point of low end.', { type: 'info' })
-  }
-  updateRampCreatorStatus()
-  const allFour = rampCreatorState.pointA && rampCreatorState.pointB && rampCreatorState.pointC && rampCreatorState.pointD
-  document.getElementById('btn-ramp-place').disabled = !allFour
-}
-
-function placeRampFromCreator() {
-  const { pointA, pointB, pointC, pointD } = rampCreatorState
-  if (!pointA || !pointB || !pointC || !pointD) return
-  const rampScale = parseFloat(document.getElementById('ramp-scale')?.value ?? '100') / 100
-  pushUndoState()
-  addRampBrushFrom4Points(pointA, pointB, pointC, pointD, rampScale)
-  const mesh = brushes[brushes.length - 1]
-  selectBrush(mesh)
-  setCurrentTool('translate')
-  setTransformMode('translate')
-  focusCameraOnObject(mesh)
-  cancelRampCreator()
-  showToast('Ramp placed.', { type: 'success' })
-}
-
-function isRampCreatorActive() {
-  return rampCreatorState.active
-}
-
 function addBrushMesh(size, position) {
-  const mesh = createBrushMesh(size, position, brushes.length * 4)
+  const mesh = createBrushMesh(size, position, brushes.length * 4, null, useLitMaterials)
   mesh.userData.id = crypto.randomUUID()
   scene.add(mesh)
+  entityRegistry.register(mesh)
   brushes.push(mesh)
   updateSceneList()
   return mesh
 }
 
-// --- Light helpers (visual only; do not cast or receive shadow) ---
-function createPointLightHelper(light) {
-  const geometry = new THREE.SphereGeometry(POINT_LIGHT_HELPER_RADIUS, 12, 8)
-  const material = new THREE.MeshBasicMaterial({
-    color: light.color.getHex ? light.color.getHex() : LIGHT_HELPER_COLOR,
-  })
-  const mesh = new THREE.Mesh(geometry, material)
-  mesh.castShadow = false
-  mesh.receiveShadow = false
-  return mesh
-}
-
-function createSpotLightHelper(light) {
-  const geometry = new THREE.CylinderGeometry(0, SPOT_LIGHT_CONE_RADIUS, SPOT_LIGHT_CONE_LENGTH, 12)
-  const material = new THREE.MeshBasicMaterial({
-    color: light.color.getHex ? light.color.getHex() : LIGHT_HELPER_COLOR,
-  })
-  const mesh = new THREE.Mesh(geometry, material)
-  mesh.position.y = -SPOT_LIGHT_CONE_LENGTH / 2
-  mesh.castShadow = false
-  mesh.receiveShadow = false
-  return mesh
-}
-
-function createDirectionalLightHelper(light) {
-  const group = new THREE.Group()
-  const sphereGeom = new THREE.SphereGeometry(DIRECTIONAL_LIGHT_HELPER_RADIUS, 12, 8)
-  const coneGeom = new THREE.CylinderGeometry(0, DIRECTIONAL_LIGHT_HELPER_CONE_RADIUS, DIRECTIONAL_LIGHT_HELPER_CONE_LENGTH, 12)
-  const material = new THREE.MeshBasicMaterial({
-    color: light.color.getHex ? light.color.getHex() : LIGHT_HELPER_COLOR,
-  })
-  const sphere = new THREE.Mesh(sphereGeom, material)
-  const cone = new THREE.Mesh(coneGeom, material)
-  cone.position.y = -DIRECTIONAL_LIGHT_HELPER_CONE_LENGTH / 2
-  sphere.castShadow = false
-  sphere.receiveShadow = false
-  cone.castShadow = false
-  cone.receiveShadow = false
-  group.add(sphere)
-  group.add(cone)
-  return group
-}
-
-function createAmbientLightHelper(light) {
-  const geometry = new THREE.PlaneGeometry(AMBIENT_LIGHT_HELPER_SIZE, AMBIENT_LIGHT_HELPER_SIZE)
-  const material = new THREE.MeshBasicMaterial({
-    color: light.color.getHex ? light.color.getHex() : LIGHT_HELPER_COLOR,
-    side: THREE.DoubleSide,
-  })
-  const mesh = new THREE.Mesh(geometry, material)
-  mesh.castShadow = false
-  mesh.receiveShadow = false
-  return mesh
-}
-
-function updateLightHelperColor(entry) {
-  if (!entry?.helper) return
-  entry.helper.traverse((child) => {
-    if (child.material?.color) {
-      child.material.color.copy(entry.light.color)
-    }
-  })
-}
-
+// --- Lights (add/remove/select; helpers from lib/light-helpers.js) ---
 function addPointLight() {
   pushUndoState()
   const light = new THREE.PointLight(0xffffff, 1, 20, 0.5)
@@ -1200,6 +706,7 @@ function pickLight(event) {
 
 function selectLight(entry) {
   selectedLight = entry
+  editorModel.setSelectedLight(entry)
   if (!entry && selectedBrush) {
     updateLightControls()
     return
@@ -1215,6 +722,7 @@ function selectLight(entry) {
       transformControls.enabled = false
       transformControlsHelper.visible = false
       selectedLight = null
+      editorModel.setSelectedLight(null)
       updateLightControls()
       return
     }
@@ -1259,13 +767,27 @@ function focusCameraOnObject(object) {
   }
 }
 
-initUIPanels({
-  brushes,
-  lights,
+const editorView = new EditorView()
+editorView.init({
+  getBrushes: () => brushes,
+  getLights: () => lights,
   baseLightEntries,
   selectBrush,
   selectLight,
   focusCameraOnObject,
+  isCsgBrush,
+  getDefaultCsgOperationKey: () => defaultCsgOperationKey,
+  csgOpValues: CSG_OP_VALUES,
+})
+initUIPanels({
+  editorView,
+  getBrushes: () => brushes,
+  getLights: () => lights,
+  baseLightEntries,
+})
+editorModel.subscribe(() => {
+  editorView.updateSceneList()
+  editorView.updateBrushToolsPanel(editorModel.selectedBrush)
 })
 initExportSystem({ saveGlb })
 
@@ -1376,26 +898,6 @@ function updateDirectionalLightHelpers() {
     entry.helper.lookAt(light.target.position)
     entry.helper.rotateX(-Math.PI / 2)
   })
-}
-
-function updateLightDirectionFromRotation(entry) {
-  if (!entry || (entry.type !== 'spot' && entry.type !== 'directional')) return
-  const light = entry.light
-  const dir = LIGHT_BASE_DIRECTION.clone().applyQuaternion(light.quaternion)
-  light.target.position.copy(light.position).add(dir)
-  updateSpotLightHelpers()
-  updateDirectionalLightHelpers()
-  updateLightControls()
-}
-
-function applyLightScaleToDistance(entry) {
-  if (!entry || (entry.type !== 'point' && entry.type !== 'spot')) return
-  const light = entry.light
-  const base = lightTransformState.baseDistance ?? light.distance ?? 0
-  const scale = Math.max(light.scale.x, light.scale.y, light.scale.z)
-  light.distance = Math.max(0, base * scale)
-  light.scale.set(1, 1, 1)
-  updateLightControls()
 }
 
 function getMazeControls() {
@@ -1712,6 +1214,7 @@ function addRampBrush(pointA, pointB, rampWidth, scale = 1) {
   mesh.userData.isUserBrush = true
   applyMazeFloorTexture(mesh)
   scene.add(mesh)
+  entityRegistry.register(mesh)
   brushes.push(mesh)
   updateSceneList()
   return mesh
@@ -1735,6 +1238,7 @@ function addRampBrushFrom4Points(pointA, pointB, pointC, pointD, scale = 1) {
   mesh.userData.isUserBrush = true
   applyMazeFloorTexture(mesh)
   scene.add(mesh)
+  entityRegistry.register(mesh)
   brushes.push(mesh)
   updateSceneList()
   return mesh
@@ -1807,6 +1311,8 @@ function clearGeneratedBrushesByGenerator(generator) {
   const toKeep = brushes.filter((m) => m.userData.isUserBrush || m.userData.generator !== generator)
   const toRemove = brushes.filter((m) => !m.userData.isUserBrush && m.userData.generator === generator)
   toRemove.forEach((m) => {
+    const id = m.userData?.id
+    if (id) entityRegistry.removeEntity(id)
     scene.remove(m)
     m.geometry.dispose()
     m.material.map?.dispose()
@@ -1822,6 +1328,8 @@ function removeGeneratedBrushes(list) {
   const toRemove = new Set(list)
   list.forEach((m) => {
     if (!m) return
+    const id = m.userData?.id
+    if (id) entityRegistry.removeEntity(id)
     scene.remove(m)
     m.geometry?.dispose?.()
     m.material?.map?.dispose?.()
@@ -1945,7 +1453,7 @@ function generateMaze() {
 }
 
 function addArenaMarkerCylinder(radius, height, position) {
-  const mesh = createCylinderMesh(radius, height, position, brushes.length * 4, { key: 'arena' })
+  const mesh = createCylinderMesh(radius, height, position, brushes.length * 4, { key: 'arena' }, useLitMaterials)
   applyArenaBaseTexture(mesh)
   mesh.userData.id = crypto.randomUUID()
   mesh.userData.isUserBrush = false
@@ -1955,13 +1463,14 @@ function addArenaMarkerCylinder(radius, height, position) {
   mesh.castShadow = false
   mesh.receiveShadow = false
   scene.add(mesh)
+  entityRegistry.register(mesh)
   brushes.push(mesh)
   if (activeGenerationCollector) activeGenerationCollector.push(mesh)
   return mesh
 }
 
 function addArenaCover(size, position) {
-  const mesh = createBrushMesh(size, position, brushes.length * 4, { key: 'arena' })
+  const mesh = createBrushMesh(size, position, brushes.length * 4, { key: 'arena' }, useLitMaterials)
   applyArenaObstacleTexture(mesh)
   mesh.userData.id = crypto.randomUUID()
   mesh.userData.isUserBrush = false
@@ -1971,6 +1480,7 @@ function addArenaCover(size, position) {
   mesh.castShadow = false
   mesh.receiveShadow = false
   scene.add(mesh)
+  entityRegistry.register(mesh)
   brushes.push(mesh)
   if (activeGenerationCollector) activeGenerationCollector.push(mesh)
   return mesh
@@ -2009,6 +1519,7 @@ function addArenaVolume() {
   mesh.userData.arenaCols = ctrl.cols
   mesh.userData.arenaRows = ctrl.rows
   scene.add(mesh)
+  entityRegistry.register(mesh)
   brushes.push(mesh)
   arenaPreview = mesh
   return mesh
@@ -2058,6 +1569,7 @@ function addMazeVolume() {
   mesh.userData.mazeCols = ctrl.cols
   mesh.userData.mazeRows = ctrl.rows
   scene.add(mesh)
+  entityRegistry.register(mesh)
   brushes.push(mesh)
   mazePreview = mesh
   return mesh
@@ -2075,6 +1587,7 @@ function addMazeArenaVolume() {
   mesh.userData.mazeArenaCols = ctrl.cols
   mesh.userData.mazeArenaRows = ctrl.rows
   scene.add(mesh)
+  entityRegistry.register(mesh)
   brushes.push(mesh)
   mazePreview = mesh
   return mesh
@@ -2118,11 +1631,6 @@ function updateMazeArenaPreviewFromControls() {
   if (!preview.position || Number.isNaN(preview.position.y)) {
     preview.position.set(0, ctrl.wallHeight / 2, 0)
   }
-}
-
-function getBrushWorldBox(mesh) {
-  const box = new THREE.Box3()
-  return box.setFromObject(mesh)
 }
 
 function isPreviewValid(preview, otherPreview, ignoreGenerator = null) {
@@ -2361,7 +1869,7 @@ function addArenaFloors(cols, rows, tileSize, storeyHeight, offset = [0, 0, 0], 
         const pz = rotated.z + offZ
         const mesh = createBrushMesh([tileSize, thickness, tileSize], [px, floorY, pz], brushes.length * 4, {
           index: TEXTURE_INDEX.arenaBase,
-        })
+        }, useLitMaterials)
         applyArenaBaseTexture(mesh)
         mesh.userData.id = crypto.randomUUID()
         mesh.userData.isUserBrush = false
@@ -2372,6 +1880,7 @@ function addArenaFloors(cols, rows, tileSize, storeyHeight, offset = [0, 0, 0], 
         mesh.castShadow = false
         mesh.receiveShadow = false
         scene.add(mesh)
+        entityRegistry.register(mesh)
         brushes.push(mesh)
         if (activeGenerationCollector) activeGenerationCollector.push(mesh)
         if (rotation) mesh.rotation.copy(rotation)
@@ -2779,6 +2288,7 @@ function regenerateMazeArenaFromLast() {
     volume.userData.mazeArenaRows = ctrl.rows
     if (placementRotation) volume.rotation.copy(placementRotation)
     scene.add(volume)
+    entityRegistry.register(volume)
     brushes.push(volume)
     updateSceneList()
   }
@@ -2786,70 +2296,8 @@ function regenerateMazeArenaFromLast() {
   generateMazeArena()
 }
 
-const useFatLines = !/Win/i.test(navigator.platform || navigator.userAgent)
-
-function addOutline(mesh) {
-  if (mesh.userData.outline || outlineWidth <= 0) return
-  const edges = new THREE.EdgesGeometry(mesh.geometry, 1)
-  let outline
-  if (useFatLines) {
-    try {
-      const outlineGeom = new LineSegmentsGeometry()
-      outlineGeom.fromEdgesGeometry(edges)
-      edges.dispose()
-      const outlineMat = new LineMaterial({
-        color: OUTLINE_COLOR,
-        linewidth: outlineWidth,
-      })
-      const vw = Math.max(1, viewport.clientWidth)
-      const vh = Math.max(1, viewport.clientHeight)
-      outlineMat.resolution.set(vw, vh)
-      outline = new LineSegments2(outlineGeom, outlineMat)
-    } catch (_) {
-      outline = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: OUTLINE_COLOR }))
-    }
-  } else {
-    outline = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: OUTLINE_COLOR }))
-  }
-  outline.raycast = () => {}
-  outline.renderOrder = 1
-  outline.userData.isOutline = true
-  mesh.add(outline)
-  mesh.userData.outline = outline
-}
-
-function removeOutline(mesh) {
-  const outline = mesh?.userData?.outline
-  if (outline) {
-    mesh.remove(outline)
-    outline.geometry?.dispose?.()
-    outline.material?.dispose?.()
-    mesh.userData.outline = null
-  }
-}
-
-function refreshOutline(mesh) {
-  const outline = mesh?.userData?.outline
-  if (!outline) return
-  outline.geometry.dispose()
-  const edges = new THREE.EdgesGeometry(mesh.geometry, 1)
-  if (outline instanceof LineSegments2) {
-    const outlineGeom = new LineSegmentsGeometry()
-    outlineGeom.fromEdgesGeometry(edges)
-    edges.dispose()
-    outline.geometry = outlineGeom
-  } else {
-    outline.geometry = edges
-  }
-}
-
 function updateOutlineResolution(width, height) {
-  brushes.forEach((brush) => {
-    const outline = brush?.userData?.outline
-    if (outline?.material?.resolution) {
-      outline.material.resolution.set(width, height)
-    }
-  })
+  brushes.forEach((brush) => setOutlineResolution(brush, width, height))
 }
 
 function selectBrush(mesh) {
@@ -2859,6 +2307,7 @@ function selectBrush(mesh) {
     selectedLight = null
     transformControls.detach()
   }
+  editorModel.setSelection(mesh)
   if (mesh) {
     addOutline(mesh)
     transformControls.enabled = true
@@ -2894,7 +2343,8 @@ function cloneBrush(mesh) {
       mesh.userData.height,
       position,
       brushes.length * 4,
-      { key: mesh.userData.textureKey, index: mesh.userData.textureIndex }
+      { key: mesh.userData.textureKey, index: mesh.userData.textureIndex },
+      useLitMaterials
     )
   } else if (isLevelBuilderVolume(mesh)) {
     clone = createLevelBuilderVolumeMesh(
@@ -2934,7 +2384,8 @@ function cloneBrush(mesh) {
       [...mesh.userData.size],
       position,
       brushes.length * 4,
-      { key: mesh.userData.textureKey, index: mesh.userData.textureIndex }
+      { key: mesh.userData.textureKey, index: mesh.userData.textureIndex },
+      useLitMaterials
     )
   }
   clone.userData.id = clone.userData.id ?? crypto.randomUUID()
@@ -2943,6 +2394,7 @@ function cloneBrush(mesh) {
   clone.position.fromArray(position)
   clone.rotation.fromArray(rotation)
   scene.add(clone)
+  entityRegistry.register(clone)
   brushes.push(clone)
   updateSceneList()
   updateCsgResult()
@@ -2959,6 +2411,8 @@ function deleteSelected() {
     return
   }
   pushUndoState()
+  const id = selectedBrush.userData?.id
+  if (id) entityRegistry.removeEntity(id)
   const idx = brushes.indexOf(selectedBrush)
   if (idx !== -1) brushes.splice(idx, 1)
   removeOutline(selectedBrush)
@@ -3049,6 +2503,7 @@ function setTransformMode(mode) {
 
 function setCurrentTool(tool) {
   currentTool = tool
+  editorModel.setTool(tool)
 }
 
 function getCurrentTool() {
@@ -3162,99 +2617,14 @@ function bakeScaleIntoGeometry(mesh) {
   }
 }
 
-// --- Level serialization (app-specific) ---
-function getSkyboxState() {
-  return {
-    turbidity: parseFloat(document.getElementById('sky-turbidity')?.value ?? '10'),
-    rayleigh: parseFloat(document.getElementById('sky-rayleigh')?.value ?? '3'),
-    mieCoefficient: parseFloat(document.getElementById('sky-mie')?.value ?? '0.005'),
-    mieDirectionalG: parseFloat(document.getElementById('sky-mie-g')?.value ?? '0.7'),
-    elevation: parseFloat(document.getElementById('sky-elevation')?.value ?? '2'),
-    azimuth: parseFloat(document.getElementById('sky-azimuth')?.value ?? '180'),
-    exposure: parseFloat(document.getElementById('sky-exposure')?.value ?? '0.5'),
-    sunIntensity: parseFloat(document.getElementById('sun-intensity')?.value ?? '1'),
-    sunColor: document.getElementById('sun-color')?.value ?? '#ffffff',
-  }
-}
-
-function setSkyboxState(state) {
-  if (!state || typeof state !== 'object') return
-  const set = (id, value) => {
-    const el = document.getElementById(id)
-    if (!el) return
-    el.value = value
-    const valueEl = document.getElementById(`${id}-value`)
-    if (valueEl) valueEl.textContent = value
-  }
-  if (state.turbidity != null) set('sky-turbidity', state.turbidity)
-  if (state.rayleigh != null) set('sky-rayleigh', state.rayleigh)
-  if (state.mieCoefficient != null) set('sky-mie', state.mieCoefficient)
-  if (state.mieDirectionalG != null) set('sky-mie-g', state.mieDirectionalG)
-  if (state.elevation != null) set('sky-elevation', state.elevation)
-  if (state.azimuth != null) set('sky-azimuth', state.azimuth)
-  if (state.exposure != null) set('sky-exposure', state.exposure)
-  if (state.sunIntensity != null) set('sun-intensity', state.sunIntensity)
-  if (state.sunColor != null) {
-    const colorEl = document.getElementById('sun-color')
-    if (colorEl) colorEl.value = state.sunColor
-  }
-  applySkyParams()
-}
-
+// --- Level serialization (delegate to lib/serialize-level; apply in main) ---
 function serializeLevel() {
-  return {
-    version: 2,
-    brushes: brushes
-      .filter((m) => m.userData.type !== 'imported' && !m.userData.isLevelBuilderVolume && !m.userData.isArenaPreview && !m.userData.isMazePreview)
-      .map((m) => {
-      const base = {
-        id: m.userData.id,
-        type: m.userData.type || 'box',
-        position: m.position.toArray(),
-        rotation: m.rotation.toArray().slice(0, 3),
-      }
-      if (m.userData.textureKey) base.textureKey = m.userData.textureKey
-      if (typeof m.userData.textureIndex === 'number') base.textureIndex = m.userData.textureIndex
-      if (base.type === 'cylinder') {
-        base.radius = m.userData.radius
-        base.height = m.userData.height
-      } else if (base.type === 'ramp' && m.userData.rampPoints) {
-        base.rampPoints = m.userData.rampPoints.map((p) => [...p])
-        base.rampScale = m.userData.rampScale ?? 1
-      } else if (m.userData.size) {
-        base.size = [...m.userData.size]
-      }
-      if (isCsgBrush(m) && m.userData.csgOperation) base.csgOperation = m.userData.csgOperation
-      if (m.userData.isUserBrush === true) base.isUserBrush = true
-      return base
-    }),
-    lights: lights.map((entry) => {
-      const light = entry.light
-      const base = {
-        type: entry.type,
-        color: `#${light.color.getHexString()}`,
-        intensity: light.intensity,
-        position: light.position.toArray(),
-      }
-      if (entry.type === 'point' || entry.type === 'spot') {
-        base.distance = light.distance
-        base.decay = light.decay
-      }
-      if (entry.type === 'spot') {
-        base.angle = light.angle
-        base.penumbra = light.penumbra
-        base.target = light.target?.position?.toArray()
-      }
-      if (entry.type === 'directional') {
-        base.target = light.target?.position?.toArray()
-      }
-      return base
-    }),
-  }
+  return serializeLevelData(() => brushes, () => lights, getSkyboxState)
 }
 
 function deserializeLevel(data) {
-  if (!data?.brushes) return
+  const parsed = parseLevelData(data)
+  if (!parsed) return
 
   brushes.forEach((m) => {
     scene.remove(m)
@@ -3263,8 +2633,9 @@ function deserializeLevel(data) {
     m.material.dispose()
   })
   brushes.length = 0
+  entityRegistry.clear()
 
-  data.brushes.forEach((b) => {
+  parsed.brushes.forEach((b) => {
     let mesh
     const textureInfo = b.textureKey ? { key: b.textureKey } : { index: b.textureIndex }
     if (b.type === 'cylinder') {
@@ -3273,7 +2644,8 @@ function deserializeLevel(data) {
         b.height ?? 2,
         b.position ?? [0, 1, 0],
         brushes.length * 4,
-        textureInfo
+        textureInfo,
+        useLitMaterials
       )
     } else if (b.type === 'ramp') {
       if (b.rampPoints && b.rampPoints.length === 4) {
@@ -3309,7 +2681,8 @@ function deserializeLevel(data) {
         b.size ?? [2, 2, 2],
         b.position ?? [0, 1, 0],
         brushes.length * 4,
-        textureInfo
+        textureInfo,
+        useLitMaterials
       )
     }
     mesh.userData.id = b.id || crypto.randomUUID()
@@ -3322,6 +2695,7 @@ function deserializeLevel(data) {
     )
     if (b.rotation) mesh.rotation.fromArray(b.rotation)
     scene.add(mesh)
+    entityRegistry.register(mesh)
     brushes.push(mesh)
   })
 
@@ -3337,8 +2711,8 @@ function deserializeLevel(data) {
   })
   lights.length = 0
 
-  if (data.lights) {
-    data.lights.forEach((l) => {
+  if (parsed.lights && parsed.lights.length > 0) {
+    parsed.lights.forEach((l) => {
       const color = l.color ?? '#ffffff'
       let light
       let helper = null
@@ -3398,7 +2772,17 @@ function deserializeLevel(data) {
   selectLight(null)
   updateSceneList()
   updateCsgResult()
+  if (parsed.skybox) {
+    setSkyboxState(parsed.skybox)
+    applySkyParams()
+  }
 }
+
+levelUndoStack = createUndoStack({
+  maxSize: 50,
+  serialize: serializeLevel,
+  deserialize: deserializeLevel,
+})
 
 async function saveLevel() {
   if (editorMode === 'floor-plan') {
@@ -3643,8 +3027,10 @@ function runLevelBuilderHeaderRefresh() {
 
 function setEditorMode(mode) {
   editorMode = mode
+  editorModel.setEditorMode(mode)
+  editorView.updatePanelVisibility(mode)
   const isFloorPlanMode = mode === 'floor-plan'
-  if (rampCreatorState.active) cancelRampCreator()
+  if (rampCreator?.isRampCreatorActive?.()) rampCreator.cancelRampCreator()
   if (toolsSelect && toolsSelect.value !== mode) {
     toolsSelect.value = mode
   }
@@ -3701,6 +3087,27 @@ toolsSelect?.addEventListener('change', (event) => {
 })
 
 setEditorMode(toolsSelect?.value ?? 'brush')
+
+rampCreator = createRampCreator({
+  scene,
+  camera,
+  viewport,
+  pickRectElement,
+  pickPoint3D,
+  pickPoint3DFromCoords,
+  createRampGeometryFrom4Points,
+  addRampBrushFrom4Points,
+  pushUndoState,
+  showToast,
+  selectBrush,
+  setCurrentTool,
+  setTransformMode,
+  focusCameraOnObject,
+  setEditorMode,
+  CM_PER_UNIT,
+  getBrushes: () => brushes,
+  setRampCreatorActive: (active) => { rampCreatorActive = active },
+})
 
 document.getElementById('level-builder-type')?.addEventListener('change', () => {
   if (isLevelBuilderVolume(selectedBrush)) {
@@ -3869,7 +3276,6 @@ if (cameraFlySpeedInput) {
 
 const outlineWidthInput = document.getElementById('outline-width')
 const outlineWidthValue = document.getElementById('outline-width-value')
-let outlineWidth = 2
 function applyOutlineWidth() {
   if (!outlineWidthInput) return
   const value = parseFloat(outlineWidthInput.value)
@@ -3970,7 +3376,7 @@ function handlePointerMoveForLook(e) {
 }
 
 renderer.domElement.addEventListener('pointermove', (e) => {
-  updateRampCursorPreview(e.clientX, e.clientY)
+  rampCreator?.updateRampCursorPreview(e.clientX, e.clientY)
   handlePointerMoveForLook(e)
 })
 document.addEventListener('pointermove', handlePointerMoveForLook)
@@ -4057,17 +3463,17 @@ const inputHandler = createInputHandler({
   camera,
   brushes,
   get selectedBrush() {
-    return selectedBrush
+    return editorModel.selectedBrush
   },
   selectBrush,
   setTransformMode,
   setCurrentTool,
   getCurrentTool,
   getEditorMode() {
-    return editorMode
+    return editorModel.editorMode
   },
-  shouldSuppressSelect: () => isRampCreatorActive(),
-  onRampCreatorPick: handleRampCreatorPick,
+  shouldSuppressSelect: () => rampCreator?.isRampCreatorActive?.() ?? false,
+  onRampCreatorPick: (e) => rampCreator?.handleRampCreatorPick(e),
   deleteSelected,
   cloneBrush,
   pushUndoState,
@@ -4080,7 +3486,7 @@ const inputHandler = createInputHandler({
   isGizmoHit,
   pickLight,
   get selectedLight() {
-    return selectedLight
+    return editorModel.selectedLight
   },
   selectLight,
   deleteSelectedLight,
@@ -4205,7 +3611,7 @@ function addEntityByType(entityType) {
     case 'floor': addFloorBrush(); return
     case 'wall': addWallBrush(); return
     case 'cylinder': addCylinderBrush(); return
-    case 'ramp': startRampCreator(); return
+    case 'ramp': rampCreator?.startRampCreator(); return
     case 'player_start': addPlayerStartMarker(); return
     case 'point_light': addPointLight(); return
     case 'spot_light': addSpotLight(); return
@@ -4302,37 +3708,36 @@ document.addEventListener('keydown', (event) => {
   }
 })
 
-document.getElementById('btn-ramp-place')?.addEventListener('click', placeRampFromCreator)
-document.getElementById('btn-ramp-cancel')?.addEventListener('click', cancelRampCreator)
+document.getElementById('btn-ramp-place')?.addEventListener('click', () => rampCreator?.placeRampFromCreator())
+document.getElementById('btn-ramp-cancel')?.addEventListener('click', () => rampCreator?.cancelRampCreator())
 
 
 document.getElementById('ramp-scale')?.addEventListener('input', (e) => {
   const el = document.getElementById('ramp-scale-value')
   if (el) el.textContent = e.target.value
-  updateRampPreview()
-  updateRampCreatorStatus()
+  rampCreator?.updateRampPreview()
+  rampCreator?.updateRampCreatorStatus()
 })
-document.getElementById('btn-move').addEventListener('click', () => inputHandler.setTransformMode('translate'))
-document.getElementById('btn-rotate').addEventListener('click', () => inputHandler.setTransformMode('rotate'))
-document.getElementById('btn-scale').addEventListener('click', () => inputHandler.setTransformMode('scale'))
-document.getElementById('btn-delete').addEventListener('click', () => inputHandler.deleteSelected())
-
-document.getElementById('btn-include-in-csg')?.addEventListener('click', () => {
-  if (!selectedBrush || !isCsgBrush(selectedBrush) || selectedBrush.userData.isUserBrush) return
-  selectedBrush.userData.isUserBrush = true
-  selectedBrush.userData.csgOperation = selectedBrush.userData.csgOperation ?? defaultCsgOperationKey
-  updateCsgOperationSelect()
-  updateCsgResult()
-  updateSceneList()
-  showToast('Mesh is now included in CSG. Use CSG mode to Add, Subtract, or Intersect.')
+const editorController = new EditorController({
+  inputHandler,
+  onIncludeInCsg() {
+    if (!selectedBrush || !isCsgBrush(selectedBrush) || selectedBrush.userData.isUserBrush) return
+    selectedBrush.userData.isUserBrush = true
+    selectedBrush.userData.csgOperation = selectedBrush.userData.csgOperation ?? defaultCsgOperationKey
+    updateCsgOperationSelect()
+    updateCsgResult()
+    updateSceneList()
+    showToast('Mesh is now included in CSG. Use CSG mode to Add, Subtract, or Intersect.')
+  },
+  onGenerateMaze: generateMaze,
+  onIterateMaze: regenerateMazeFromLast,
+  onSaveLevel: saveLevel,
+  onLoadLevel: loadLevelFromFile,
+  onExportCancel() {
+    document.getElementById('export-modal')?.classList.add('hidden')
+  },
 })
-document.getElementById('btn-generate-maze').addEventListener('click', generateMaze)
-document.getElementById('btn-iterate-maze').addEventListener('click', regenerateMazeFromLast)
-document.getElementById('btn-save').addEventListener('click', () => saveLevel())
-document.getElementById('btn-load').addEventListener('click', () => loadLevelFromFile())
-document.getElementById('btn-export-cancel')?.addEventListener('click', () => {
-  document.getElementById('export-modal')?.classList.add('hidden')
-})
+editorController.wire()
 
 // --- Resize ---
 const resizeObserver = new ResizeObserver(() => {
