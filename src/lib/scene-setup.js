@@ -18,16 +18,38 @@ export function initScene({ gridColor }) {
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 5000)
   camera.position.set(8, 8, 8)
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true })
-  renderer.setPixelRatio(window.devicePixelRatio)
-  renderer.setSize(viewport.clientWidth, viewport.clientHeight)
-  renderer.shadowMap.enabled = false
-  renderer.outputColorSpace = THREE.SRGBColorSpace
-  renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 0.5
-  viewport.appendChild(renderer.domElement)
+  let renderer
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true })
+  } catch (err) {
+    // Headless or restricted GPU (e.g. CI) may not support WebGL; keep UI functional
+    const canvas = document.createElement('canvas')
+    viewport.appendChild(canvas)
+    pickRectElement = canvas
+    renderer = {
+      domElement: canvas,
+      setPixelRatio: () => {},
+      setSize: () => {},
+      shadowMap: { enabled: false },
+      outputColorSpace: '',
+      toneMapping: 0,
+      toneMappingExposure: 0.5,
+      render: () => {},
+      capabilities: { getMaxAnisotropy: () => 1 },
+    }
+  }
+  const maxAnisotropy =
+    renderer.capabilities?.getMaxAnisotropy?.() ?? 1
+  if (renderer.setPixelRatio) renderer.setPixelRatio(window.devicePixelRatio)
+  if (renderer.setSize) renderer.setSize(viewport.clientWidth, viewport.clientHeight)
+  if (renderer.shadowMap) renderer.shadowMap.enabled = false
+  if (renderer.outputColorSpace !== undefined) renderer.outputColorSpace = THREE.SRGBColorSpace
+  if (renderer.toneMapping !== undefined) renderer.toneMapping = THREE.ACESFilmicToneMapping
+  if (renderer.toneMappingExposure !== undefined) renderer.toneMappingExposure = 0.5
+  if (!viewport.contains(renderer.domElement)) {
+    viewport.appendChild(renderer.domElement)
+  }
   pickRectElement = renderer.domElement
-  const maxAnisotropy = renderer.capabilities.getMaxAnisotropy()
 
   const grid = new THREE.GridHelper(20, 20, gridColor, gridColor)
   grid.position.y = -0.01

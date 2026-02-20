@@ -89,6 +89,20 @@ npm install
 npm run dev
 ```
 
+### E2E tests
+
+Run end-to-end tests with Playwright. **First time (and after Playwright upgrades), install the browser:**
+
+```bash
+npm run test:e2e:install
+```
+
+Then run e2e tests:
+
+```bash
+npm run test:e2e
+```
+
 ## Deploy to GitHub Pages
 
 **One-time setup** (if you haven’t already):

@@ -5,6 +5,53 @@ let _getCsgResultMesh = null
 let _getCsgParticipatingSet = null
 let _isCsgBrush = null
 
+/**
+ * Build the list of objects to export. Pure function for testing.
+ * @param {object[]} selected - Checked export entries (objects/lights)
+ * @param {boolean} bakeCsg - Whether "Bake CSG" is checked
+ * @param {() => object | null} getCsgResultMesh
+ * @param {() => Set<object>} getCsgParticipatingSet
+ * @param {(obj: object) => boolean} isCsgBrush
+ * @returns {object[]}
+ */
+export function buildObjectsToExport(
+  selected,
+  bakeCsg,
+  getCsgResultMesh,
+  getCsgParticipatingSet,
+  isCsgBrush
+) {
+  if (!bakeCsg) return [...selected]
+  const resultMesh = getCsgResultMesh?.() ?? null
+  const participating = getCsgParticipatingSet?.() ?? new Set()
+  const hasSelectedCsgBrush = selected.some((obj) => isCsgBrush(obj))
+  let objectsToExport = []
+  if (resultMesh && hasSelectedCsgBrush) {
+    objectsToExport.push(resultMesh)
+  }
+  selected.forEach((obj) => {
+    if (isCsgBrush(obj)) {
+      if (participating.has(obj)) {
+        // Already represented by the baked result mesh
+      } else if (
+        obj.userData?.csgOperation === 'SUBTRACTION' ||
+        obj.userData?.csgOperation === 'INTERSECTION'
+      ) {
+        // Never export subtractive/intersection as solid meshes when bake requested
+      } else {
+        objectsToExport.push(obj)
+      }
+    } else {
+      objectsToExport.push(obj)
+    }
+  })
+  return objectsToExport.filter(
+    (obj) =>
+      !isCsgBrush(obj) ||
+      (obj.userData?.csgOperation !== 'SUBTRACTION' && obj.userData?.csgOperation !== 'INTERSECTION')
+  )
+}
+
 export function initExportSystem({ saveGlb, getCsgResultMesh, getCsgParticipatingSet, isCsgBrush }) {
   _saveGlb = saveGlb
   _getCsgResultMesh = getCsgResultMesh ?? (() => null)
@@ -115,41 +162,13 @@ export function openExportModal() {
     if (!_saveGlb) return
 
     const bakeCsg = document.getElementById('export-bake-csg')?.checked === true
-    let objectsToExport = selected
-
-    if (bakeCsg) {
-      const resultMesh = _getCsgResultMesh?.() ?? null
-      const participating = _getCsgParticipatingSet?.() ?? new Set()
-      const hasSelectedCsgBrush = selected.some((obj) => _isCsgBrush(obj))
-      objectsToExport = []
-      if (resultMesh && hasSelectedCsgBrush) {
-        objectsToExport.push(resultMesh)
-      }
-      // Add brushes that did not participate in the result (rest of maze) so the full level is in the file
-      selected.forEach((obj) => {
-        if (_isCsgBrush(obj)) {
-          if (participating.has(obj)) {
-            // Already represented by the baked result mesh
-          } else if (
-            obj.userData?.csgOperation === 'SUBTRACTION' ||
-            obj.userData?.csgOperation === 'INTERSECTION'
-          ) {
-            // Never export subtractive/intersection as solid meshes when bake requested
-          } else {
-            objectsToExport.push(obj)
-          }
-        } else {
-          objectsToExport.push(obj)
-        }
-      })
-      // Safety: never include subtractive/intersection brushes when bake requested (other apps can't do CSG)
-      objectsToExport = objectsToExport.filter(
-        (obj) =>
-          !_isCsgBrush(obj) ||
-          (obj.userData?.csgOperation !== 'SUBTRACTION' && obj.userData?.csgOperation !== 'INTERSECTION')
-      )
-    }
-
+    const objectsToExport = buildObjectsToExport(
+      selected,
+      bakeCsg,
+      _getCsgResultMesh,
+      _getCsgParticipatingSet,
+      _isCsgBrush
+    )
     await _saveGlb(objectsToExport, { filename: 'level.glb' })
   }
 
