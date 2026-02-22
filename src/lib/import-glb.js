@@ -1,5 +1,9 @@
+import * as THREE from 'three'
 import { Brush } from 'three-bvh-csg'
 import { getTextureByIndex, TEXTURE_INDEX } from './materials.js'
+
+/** Dark grid texture index used for all imported GLB meshes (unlit). */
+const IMPORT_UNLIT_TEXTURE_INDEX = TEXTURE_INDEX.mazeFloor
 
 const SUBTYPE_TEXTURE_INDEX = {
   'maze-floor': TEXTURE_INDEX.mazeFloor,
@@ -47,29 +51,37 @@ export function createImportSystem({
   /**
    * @param {THREE.Mesh[]} meshes
    * @param {() => void} [onSceneReady] - Called when the scene is ready (CSG applied if any). Used to hide import spinner only after the maze is visible.
+   * @param {string} [importGroupName] - Name for grouping in scene list and export (e.g. filename without extension).
    */
-  function addImportedMeshes(meshes, onSceneReady) {
+  function addImportedMeshes(meshes, onSceneReady, importGroupName) {
     if (!meshes || meshes.length === 0) return
     pushUndoState()
+    const groupName = importGroupName?.trim() || null
     meshes.forEach((mesh, idx) => {
       const existingType = mesh.userData?.type
       const isEditorBrush = existingType && EDITOR_BRUSH_TYPES.has(existingType)
       const isPlayerStart = existingType === 'player_start'
 
       if (!isPlayerStart) {
-        const subtype = mesh.userData?.subtype
-        const textureIndex = SUBTYPE_TEXTURE_INDEX[subtype]
-        const tex =
-          textureIndex != null ? getTextureByIndex(textureIndex) : loadTextureForSpawn()
+        const darkTex = getTextureByIndex(IMPORT_UNLIT_TEXTURE_INDEX)
         const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-        materials.forEach((mat) => {
-          if (mat && mat.map !== undefined) mat.map = tex
+        materials.forEach((mat) => mat?.dispose?.())
+        const unlitMaterial = new THREE.MeshBasicMaterial({
+          map: darkTex,
+          polygonOffset: false,
+          polygonOffsetFactor: 0,
+          polygonOffsetUnits: 0,
         })
+        mesh.material =
+          Array.isArray(mesh.material) && mesh.material.length > 1
+            ? mesh.material.map(() => unlitMaterial.clone())
+            : unlitMaterial
       }
       mesh.userData.isBrush = true
       if (!isEditorBrush) {
         mesh.userData.type = 'imported'
       }
+      if (groupName) mesh.userData.importGroup = groupName
       mesh.userData.id = mesh.userData.id || crypto.randomUUID()
       mesh.userData.isUserBrush = true
       mesh.castShadow = getUseLitMaterials()
@@ -130,7 +142,8 @@ export function createImportSystem({
           }
           const meshes = collectMeshes(sceneRoot)
           const lights = collectLights(sceneRoot)
-          addImportedMeshes(meshes, () => setImportLoading?.(false))
+          const importGroupName = first.name.replace(/\.(glb|gltf)$/i, '') || 'import'
+          addImportedMeshes(meshes, () => setImportLoading?.(false), importGroupName)
           if (addImportedLight) {
             lights.forEach((light) => addImportedLight(light))
           }

@@ -33,7 +33,7 @@ export function buildExportEntries() {
   brushes.forEach((mesh) => {
     if (!mesh || mesh.userData?.isLevelBuilderVolume || mesh.userData?.isArenaPreview || mesh.userData?.isMazePreview) return
     if (!mesh.parent) return
-    const groupId = mesh.userData?.generatorGroup
+    const groupId = mesh.userData?.generatorGroup ?? mesh.userData?.importGroup
     const subtype = mesh.userData?.subtype
     const labelBase = subtype ?? mesh.userData?.type ?? 'object'
     const label = `${labelBase}_${String(mesh.userData?.id ?? '').slice(0, 8) || 'no-id'}`

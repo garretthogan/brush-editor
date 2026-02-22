@@ -101,7 +101,7 @@ export class EditorView {
     brushes.forEach((mesh) => {
       if (!mesh) return
       if (!mesh.parent) return
-      const groupId = mesh.userData?.generatorGroup
+      const groupId = mesh.userData?.generatorGroup ?? mesh.userData?.importGroup
       const subtype = mesh.userData?.subtype
       const labelBase = subtype ?? mesh.userData?.type ?? 'object'
       const label = `${labelBase}_${shortId(mesh.userData?.id)}`
