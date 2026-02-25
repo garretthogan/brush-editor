@@ -6,6 +6,9 @@ const stubTexture = {}
 
 vi.mock('./materials.js', () => ({
   getTextureByIndex: () => stubTexture,
+  getTextureForImportedMesh: () => stubTexture,
+  getTextureWithWorldRepeat: () => stubTexture,
+  getRandomDarkTextureIndex: () => 0,
   TEXTURE_INDEX: {
     mazeFloor: 0,
     mazeWall: 1,
@@ -60,7 +63,7 @@ describe('createImportSystem / addImportedMeshes', () => {
     expect(pushUndoState).not.toHaveBeenCalled()
   })
 
-  it('adds box as Brush and pushes to brushes and scene', () => {
+  it('adds box as single imported mesh and pushes to brushes and scene', () => {
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(1, 1, 1),
       new THREE.MeshBasicMaterial()
@@ -70,13 +73,12 @@ describe('createImportSystem / addImportedMeshes', () => {
     addImportedMeshes([mesh])
     expect(scene.children).toHaveLength(1)
     expect(brushes).toHaveLength(1)
-    expect(brushes[0].userData.type).toBe('box')
-    expect(brushes[0].userData.subtype).toBe('maze-wall')
+    expect(brushes[0].userData.type).toBe('imported')
     expect(brushes[0].userData.isBrush).toBe(true)
     expect(brushes[0].userData.isUserBrush).toBe(true)
   })
 
-  it('adds cylinder as Brush with csgOperation preserved', () => {
+  it('adds cylinder as single imported mesh', () => {
     const mesh = new THREE.Mesh(
       new THREE.CylinderGeometry(0.5, 0.5, 2, 8),
       new THREE.MeshBasicMaterial()
@@ -85,11 +87,10 @@ describe('createImportSystem / addImportedMeshes', () => {
     const { addImportedMeshes } = createSystem()
     addImportedMeshes([mesh])
     expect(brushes).toHaveLength(1)
-    expect(brushes[0].userData.type).toBe('cylinder')
-    expect(brushes[0].userData.csgOperation).toBe('SUBTRACTION')
+    expect(brushes[0].userData.type).toBe('imported')
   })
 
-  it('adds maze-floor and maze-wall with correct userData subtype', () => {
+  it('adds each mesh as separate imported brush with random Dark texture', () => {
     const floor = new THREE.Mesh(
       new THREE.BoxGeometry(10, 0.2, 10),
       new THREE.MeshBasicMaterial()
@@ -103,8 +104,30 @@ describe('createImportSystem / addImportedMeshes', () => {
     const { addImportedMeshes } = createSystem()
     addImportedMeshes([floor, wall])
     expect(brushes).toHaveLength(2)
-    const subtypes = brushes.map((b) => b.userData.subtype).sort()
-    expect(subtypes).toEqual(['maze-floor', 'maze-wall'])
+    expect(brushes[0].userData.type).toBe('imported')
+    expect(brushes[1].userData.type).toBe('imported')
+    expect(typeof brushes[0].userData.textureIndex).toBe('number')
+    expect(typeof brushes[1].userData.textureIndex).toBe('number')
+  })
+
+  it('keeps player_start as separate mesh, adds each other mesh as separate imported brush', () => {
+    const floor = new THREE.Mesh(
+      new THREE.BoxGeometry(10, 0.2, 10),
+      new THREE.MeshBasicMaterial()
+    )
+    floor.userData = { type: 'maze-floor' }
+    const start = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial()
+    )
+    start.userData = { type: 'player_start' }
+    const { addImportedMeshes } = createSystem()
+    addImportedMeshes([floor, start])
+    expect(brushes).toHaveLength(2)
+    const imported = brushes.find((b) => b.userData.type === 'imported')
+    const playerStart = brushes.find((b) => b.userData.type === 'player_start')
+    expect(imported).toBeDefined()
+    expect(playerStart).toBeDefined()
   })
 
   it('calls onBrushesChanged with callback when provided', () => {
@@ -112,7 +135,7 @@ describe('createImportSystem / addImportedMeshes', () => {
       new THREE.BoxGeometry(1, 1, 1),
       new THREE.MeshBasicMaterial()
     )
-    mesh.userData = { type: 'box' }
+    mesh.userData = { type: 'imported' }
     const { addImportedMeshes } = createSystem()
     const onSceneReady = vi.fn()
     addImportedMeshes([mesh], onSceneReady)
@@ -124,7 +147,7 @@ describe('createImportSystem / addImportedMeshes', () => {
       new THREE.BoxGeometry(1, 1, 1),
       new THREE.MeshBasicMaterial()
     )
-    mesh.userData = { type: 'box' }
+    mesh.userData = { type: 'imported' }
     const { addImportedMeshes } = createSystem()
     addImportedMeshes([mesh])
     expect(pushUndoState).toHaveBeenCalledTimes(1)
