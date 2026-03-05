@@ -61,6 +61,9 @@ import {
   createCylinderMesh,
   createPlayerStartMesh,
 } from './lib/brush-mesh.js'
+import { WebGLPathTracer, GradientEquirectTexture } from 'three-gpu-pathtracer'
+import { HDRLoader } from 'three/addons/loaders/HDRLoader.js'
+import { EquirectangularReflectionMapping } from 'three'
 
 const GRID_COLOR = 0x333333
 const OUTLINE_COLOR = 0xff8800
@@ -129,6 +132,114 @@ setState({
   transformControls,
 })
 
+/** Path tracer for Global Illumination tab (ray-traced preview). Created lazily; requires real WebGL2 renderer. */
+let pathTracer = null
+/** Previous camera matrix; only call path tracer updateCamera when camera actually moves (avoid reset every frame). */
+const giPrevCameraMatrix = new THREE.Matrix4()
+let giCameraMatrixDirty = true
+/** Gradient + env lighting in GI mode. Use known-working URLs (three.js r150; gkjohnson/3d-demo-data master). */
+const GI_ENV_MAPS = {
+  'Royal Esplanade':
+    'https://raw.githubusercontent.com/mrdoob/three.js/r150/examples/textures/equirectangular/royal_esplanade_1k.hdr',
+  'Venice Sunset':
+    'https://raw.githubusercontent.com/mrdoob/three.js/r150/examples/textures/equirectangular/venice_sunset_1k.hdr',
+  'Moonless Golf':
+    'https://raw.githubusercontent.com/mrdoob/three.js/r150/examples/textures/equirectangular/moonless_golf_1k.hdr',
+  'Aristea Wreck Puresky':
+    'https://raw.githubusercontent.com/gkjohnson/3d-demo-data/master/hdri/aristea_wreck_puresky_2k.hdr',
+  'Small Studio': 'https://raw.githubusercontent.com/gkjohnson/3d-demo-data/master/hdri/studio_small_05_1k.hdr',
+  'Brown Photostudio': 'https://raw.githubusercontent.com/gkjohnson/3d-demo-data/master/hdri/brown_photostudio_01_2k.hdr',
+}
+let giGradientMap = null
+let giPrevBackground = null
+let giPrevEnvironment = null
+/** Path tracer does not run until user clicks Start; reset to false when leaving GI mode. */
+let giPathTracerStarted = false
+const giParams = {
+  pause: false,
+  bounces: 8,
+  minSamples: 64,
+  filterGlossyFactor: 0.5,
+  renderScale: 1,
+  tiles: 2,
+  multipleImportanceSampling: true,
+  envMapKey: 'Royal Esplanade',
+  environmentIntensity: 1,
+  environmentRotation: 0,
+  bgGradientTop: '#111111',
+  bgGradientBottom: '#000000',
+  backgroundBlur: 0,
+}
+
+function getOrCreatePathTracer() {
+  if (pathTracer != null) return pathTracer
+  if (!renderer.getContext || renderer.getContext().isContextLost()) return null
+  try {
+    pathTracer = new WebGLPathTracer(renderer)
+    pathTracer.physicallyCorrectLights = true
+    pathTracer.enablePathTracing = true
+    pathTracer.renderToCanvas = true
+    pathTracer.multipleImportanceSampling = giParams.multipleImportanceSampling
+    pathTracer.tiles.set(giParams.tiles, giParams.tiles)
+    pathTracer.bounces = giParams.bounces
+    pathTracer.filterGlossyFactor = giParams.filterGlossyFactor
+    pathTracer.renderScale = giParams.renderScale
+    pathTracer.minSamples = giParams.minSamples
+    pathTracer.fadeDuration = 800
+  } catch (e) {
+    console.warn('Path tracer init failed:', e)
+    if (typeof showToast === 'function') showToast('Path tracer failed to start; showing raster view.', { type: 'error' })
+    return null
+  }
+  return pathTracer
+}
+
+function applyGiParamsToPathTracer() {
+  if (!pathTracer) return
+  pathTracer.multipleImportanceSampling = giParams.multipleImportanceSampling
+  pathTracer.bounces = giParams.bounces
+  pathTracer.minSamples = giParams.minSamples
+  pathTracer.filterGlossyFactor = giParams.filterGlossyFactor
+  pathTracer.renderScale = giParams.renderScale
+  pathTracer.tiles.set(giParams.tiles, giParams.tiles)
+  pathTracer.updateMaterials()
+  pathTracer.updateEnvironment()
+  pathTracer.reset()
+}
+
+/** Call when scene lights are added, removed, or edited so the path tracer uses them. */
+function notifyPathTracerLightsChanged() {
+  if (editorMode !== 'skybox' || !pathTracer) return
+  pathTracer.updateLights()
+}
+
+function loadGiEnvMap(url, onDone) {
+  if (!url) {
+    onDone?.()
+    return
+  }
+  new HDRLoader().load(
+    url,
+    (texture) => {
+      texture.mapping = EquirectangularReflectionMapping
+      if (scene.environment && scene.environment !== giGradientMap) scene.environment.dispose?.()
+      scene.environment = texture
+      scene.environmentIntensity = giParams.environmentIntensity
+      if (!scene.environmentRotation) scene.environmentRotation = new THREE.Euler(0, giParams.environmentRotation, 0)
+      else scene.environmentRotation.y = giParams.environmentRotation
+      const pt = getOrCreatePathTracer()
+      if (pt) pt.updateEnvironment()
+      onDone?.()
+    },
+    undefined,
+    (err) => {
+      console.warn('GI environment map failed to load:', url, err)
+      if (showToast) showToast('Environment map could not be loaded. Try another map.', { type: 'error' })
+      onDone?.()
+    }
+  )
+}
+
 const { addOutline, removeOutline, refreshOutline, setOutlineResolution } = createOutlineSystem({
   LineSegments2,
   LineSegmentsGeometry,
@@ -142,6 +253,7 @@ let isTransformDragging = false
 
 transformControls.addEventListener('dragging-changed', (e) => {
   isTransformDragging = e.value
+  if (selectedLight && !e.value) notifyPathTracerLightsChanged()
   if (!selectedLight || !e.value) return
   const mode = transformControls.getMode()
   if (mode === 'scale' && (selectedLight.type === 'point' || selectedLight.type === 'spot')) {
@@ -213,6 +325,13 @@ function updateCsgResult(onComplete) {
       scene.add(csgResultMesh)
     }
     restoreVisibility()
+    if (editorMode === 'skybox') {
+      csgParticipatingBrushes.forEach((b) => { b.visible = false })
+      if (pathTracer && resultMesh) {
+        pathTracer.setScene(scene, camera)
+        pathTracer.reset()
+      }
+    }
     onComplete?.()
   }
 
@@ -628,6 +747,7 @@ function addPointLight() {
   focusCameraOnObject(light)
   updateSceneList()
   updateShadowState(useLitMaterials)
+  notifyPathTracerLightsChanged()
 }
 
 function addSpotLight() {
@@ -650,6 +770,7 @@ function addSpotLight() {
   focusCameraOnObject(light)
   updateSceneList()
   updateShadowState(useLitMaterials)
+  notifyPathTracerLightsChanged()
 }
 
 function addDirectionalLight() {
@@ -672,6 +793,7 @@ function addDirectionalLight() {
   focusCameraOnObject(light)
   updateSceneList()
   updateShadowState(useLitMaterials)
+  notifyPathTracerLightsChanged()
 }
 
 function addAmbientLight() {
@@ -689,6 +811,7 @@ function addAmbientLight() {
   focusCameraOnObject(light)
   updateSceneList()
   updateShadowState(useLitMaterials)
+  notifyPathTracerLightsChanged()
 }
 
 function addImportedLight(light) {
@@ -719,6 +842,7 @@ function addImportedLight(light) {
   updateLightControls()
   updateSceneList()
   updateShadowState(useLitMaterials)
+  notifyPathTracerLightsChanged()
 }
 
 function getLightHelpers() {
@@ -915,6 +1039,7 @@ function deleteSelectedLight() {
   }
   selectLight(null)
   updateSceneList()
+  notifyPathTracerLightsChanged()
   showToast('Light removed.', {
     type: 'undo',
     recoveryLabel: 'Undo',
@@ -2879,13 +3004,14 @@ const levelBuilderEntitiesRoot = document.getElementById('level-builder-entities
 let floorPlanToolMounted = false
 
 function applySkyParams() {
-  const turbidity = parseFloat(document.getElementById('sky-turbidity').value)
-  const rayleigh = parseFloat(document.getElementById('sky-rayleigh').value)
-  const mieCoefficient = parseFloat(document.getElementById('sky-mie').value)
-  const mieDirectionalG = parseFloat(document.getElementById('sky-mie-g').value)
-  const elevation = parseFloat(document.getElementById('sky-elevation').value)
-  const azimuth = parseFloat(document.getElementById('sky-azimuth').value)
-  const exposure = parseFloat(document.getElementById('sky-exposure').value)
+  const turbidityEl = document.getElementById('sky-turbidity')
+  const turbidity = turbidityEl ? parseFloat(turbidityEl.value) : 8.6
+  const rayleigh = document.getElementById('sky-rayleigh') ? parseFloat(document.getElementById('sky-rayleigh').value) : 4
+  const mieCoefficient = document.getElementById('sky-mie') ? parseFloat(document.getElementById('sky-mie').value) : 0.1
+  const mieDirectionalG = document.getElementById('sky-mie-g') ? parseFloat(document.getElementById('sky-mie-g').value) : 1
+  const elevation = document.getElementById('sky-elevation') ? parseFloat(document.getElementById('sky-elevation').value) : 0
+  const azimuth = document.getElementById('sky-azimuth') ? parseFloat(document.getElementById('sky-azimuth').value) : -11
+  const exposure = document.getElementById('sky-exposure') ? parseFloat(document.getElementById('sky-exposure').value) : 0.5
 
   const uniforms = sky.material.uniforms
   uniforms.turbidity.value = turbidity
@@ -2898,14 +3024,13 @@ function applySkyParams() {
   sun.setFromSphericalCoords(1, phi, theta)
   uniforms.sunPosition.value.copy(sun)
 
-  // Match directional light to sun (light shines from position toward origin)
   dirLight.position.copy(sun).multiplyScalar(500)
   const sunIntensity = parseFloat(document.getElementById('sun-intensity')?.value ?? '1')
   const sunColorHex = document.getElementById('sun-color')?.value ?? '#ffffff'
   dirLight.intensity = sunIntensity
   dirLight.color.set(sunColorHex)
 
-  renderer.toneMappingExposure = exposure
+  if (renderer.toneMappingExposure !== undefined) renderer.toneMappingExposure = exposure
 }
 
 function updateLevelBuilderControlPanels() {
@@ -3094,6 +3219,13 @@ function setEditorMode(mode) {
   brushControls.classList.toggle('hidden', mode !== 'brush')
   updateLevelBuilderControlPanels()
   skyboxControls.classList.toggle('hidden', mode !== 'skybox')
+  if (mode !== 'skybox') giPathTracerStarted = false
+  const giSamplesIndicator = document.getElementById('gi-samples-indicator')
+  const giStartWrapper = document.getElementById('gi-path-tracer-start-wrapper')
+  if (giSamplesIndicator) giSamplesIndicator.classList.toggle('hidden', mode !== 'skybox')
+  if (giStartWrapper) giStartWrapper.classList.toggle('hidden', mode !== 'skybox')
+  const btnStart = document.getElementById('btn-gi-start-path-tracer')
+  if (btnStart) btnStart.textContent = 'Start path tracer'
   floorPlanControls.classList.toggle('hidden', !isFloorPlanMode)
   if (cameraControlsPanel) cameraControlsPanel.classList.toggle('hidden', isFloorPlanMode)
   if (sceneListPanel) sceneListPanel.classList.toggle('hidden', mode !== 'brush')
@@ -3101,10 +3233,79 @@ function setEditorMode(mode) {
   if (levelBuilderEntitiesPanel) levelBuilderEntitiesPanel.classList.toggle('hidden', mode !== 'level-builder')
   updateHeaderAddButtonState()
   updateHeaderRefreshButtonState()
-  sky.visible = mode === 'skybox' && !isFloorPlanMode
+  // In GI mode use env map + gradient (no procedural sky); in other modes sky stays hidden.
+  sky.visible = false
   useLitMaterials = mode === 'skybox' && !isFloorPlanMode
   updateBrushMaterials(useLitMaterials)
   updateShadowState(mode === 'skybox')
+  // CSG result mesh is not in brushes; switch it to lit/unlit so path tracer sees lit material in GI mode.
+  if (csgResultMesh?.material) {
+    const mat = csgResultMesh.material
+    const texture = mat.map ?? null
+    const depthBias = mat.polygonOffsetUnits ?? 0
+    const color = mat.color ? mat.color.clone() : null
+    const newMat = createBrushMaterial(texture, depthBias, useLitMaterials, color)
+    mat.dispose?.()
+    csgResultMesh.material = newMat
+    csgResultMesh.castShadow = useLitMaterials
+    csgResultMesh.receiveShadow = useLitMaterials
+    // In GI (path tracer), both sides of every face must participate so floors and walls cast/receive shadows.
+    if (useLitMaterials) csgResultMesh.material.side = THREE.DoubleSide
+  }
+  // updateBrushMaterials() gives every brush a new material (visible = true). When there is a CSG
+  // result, participating brushes must stay hidden so only the result is shown (subtractive stays subtractive).
+  if (mode !== 'skybox' && csgResultMesh) {
+    csgParticipatingBrushes.forEach((b) => {
+      if (b.material) b.material.visible = false
+    })
+  }
+  if (mode === 'skybox') {
+    // Re-run CSG so result is present (e.g. after duplicate + subtractive cylinder); then path tracer sees it.
+    updateCsgResult()
+    // Lighting from environment map + gradient background (three-gpu-pathtracer example style).
+    giPrevBackground = scene.background
+    giPrevEnvironment = scene.environment
+    if (!giGradientMap) {
+      giGradientMap = new GradientEquirectTexture(16)
+    }
+    giGradientMap.topColor.set(giParams.bgGradientTop)
+    giGradientMap.bottomColor.set(giParams.bgGradientBottom)
+    giGradientMap.update()
+    scene.background = giGradientMap
+    scene.backgroundIntensity = 1
+    scene.backgroundBlurriness = giParams.backgroundBlur
+    if (!scene.environmentRotation) scene.environmentRotation = new THREE.Euler(0, 0, 0)
+    scene.environmentRotation.y = giParams.environmentRotation
+    scene.environmentIntensity = giParams.environmentIntensity
+    const envUrl = GI_ENV_MAPS[giParams.envMapKey] || Object.values(GI_ENV_MAPS)[0]
+    loadGiEnvMap(envUrl)
+    // Only hide participating brushes when we have a CSG result mesh; otherwise path tracer would see no geometry.
+    if (csgResultMesh) {
+      csgResultMesh.visible = true
+      if (!scene.children.includes(csgResultMesh)) scene.add(csgResultMesh)
+      csgParticipatingBrushes.forEach((b) => {
+        b.visible = false
+      })
+    }
+    grid.visible = false
+    if (transformControlsHelper) transformControlsHelper.visible = false
+    const pt = getOrCreatePathTracer()
+    if (pt) {
+      applyGiParamsToPathTracer()
+      pt.setScene(scene, camera)
+      pt.reset()
+    }
+  } else {
+    if (giPrevBackground !== undefined) scene.background = giPrevBackground
+    if (giPrevEnvironment !== undefined) scene.environment = giPrevEnvironment
+    giPrevBackground = null
+    giPrevEnvironment = null
+    csgParticipatingBrushes.forEach((b) => {
+      b.visible = true
+    })
+    grid.visible = true
+    if (transformControlsHelper) transformControlsHelper.visible = transformControls?.enabled ?? false
+  }
   if (mode === 'level-builder') {
     updateLevelBuilderControlPanels()
     renderLevelBuilderEntitiesList()
@@ -3267,26 +3468,91 @@ bindMazeSlider('maze-arena-height', 'maze-arena-height-value', updateMazeArenaPr
 bindMazeSlider('maze-arena-density', 'maze-arena-density-value')
 bindMazeSlider('maze-arena-buildings', 'maze-arena-buildings-value')
 
-// Skybox slider value display and apply
-function bindSkySlider(id, valueId) {
+// GI (Global Illumination) path tracer controls — match three-gpu-pathtracer example
+const giEnvMapSelect = document.getElementById('gi-envMap')
+if (giEnvMapSelect) {
+  Object.keys(GI_ENV_MAPS).forEach((name) => {
+    const opt = document.createElement('option')
+    opt.value = name
+    opt.textContent = name
+    if (name === giParams.envMapKey) opt.selected = true
+    giEnvMapSelect.appendChild(opt)
+  })
+  giEnvMapSelect.addEventListener('change', () => {
+    giParams.envMapKey = giEnvMapSelect.value
+    if (editorMode === 'skybox') {
+      const url = GI_ENV_MAPS[giParams.envMapKey]
+      if (url) loadGiEnvMap(url)
+    }
+  })
+}
+function bindGiSlider(id, valueId, key, min, max, step, apply) {
   const input = document.getElementById(id)
   const valueEl = document.getElementById(valueId)
   if (!input || !valueEl) return
-  input.addEventListener('input', (e) => {
-    valueEl.textContent = e.target.value
-    applySkyParams()
+  input.addEventListener('input', () => {
+    const v = key === 'renderScale' ? parseFloat(input.value) : parseFloat(input.value)
+    giParams[key] = v
+    valueEl.textContent = key === 'renderScale' ? v.toFixed(2) : input.value
+    if (editorMode === 'skybox') apply?.()
   })
 }
-bindSkySlider('sky-turbidity', 'sky-turbidity-value')
-bindSkySlider('sky-rayleigh', 'sky-rayleigh-value')
-bindSkySlider('sky-mie', 'sky-mie-value')
-bindSkySlider('sky-mie-g', 'sky-mie-g-value')
-bindSkySlider('sky-elevation', 'sky-elevation-value')
-bindSkySlider('sky-azimuth', 'sky-azimuth-value')
-bindSkySlider('sky-exposure', 'sky-exposure-value')
-bindSkySlider('sun-intensity', 'sun-intensity-value')
-const sunColorInput = document.getElementById('sun-color')
-if (sunColorInput) sunColorInput.addEventListener('input', applySkyParams)
+bindGiSlider('gi-bounces', 'gi-bounces-value', 'bounces', 1, 20, 1, applyGiParamsToPathTracer)
+bindGiSlider('gi-minSamples', 'gi-minSamples-value', 'minSamples', 16, 256, 16, applyGiParamsToPathTracer)
+bindGiSlider('gi-filterGlossy', 'gi-filterGlossy-value', 'filterGlossyFactor', 0, 1, 0.05, applyGiParamsToPathTracer)
+bindGiSlider('gi-renderScale', 'gi-renderScale-value', 'renderScale', 0.1, 1, 0.05, applyGiParamsToPathTracer)
+bindGiSlider('gi-tiles', 'gi-tiles-value', 'tiles', 1, 6, 1, applyGiParamsToPathTracer)
+const giPauseCheck = document.getElementById('gi-pause')
+if (giPauseCheck) {
+  giPauseCheck.checked = giParams.pause
+  giPauseCheck.addEventListener('change', () => { giParams.pause = giPauseCheck.checked })
+}
+const btnGiStartPathTracer = document.getElementById('btn-gi-start-path-tracer')
+if (btnGiStartPathTracer) {
+  btnGiStartPathTracer.addEventListener('click', () => {
+    giPathTracerStarted = true
+    const pt = getOrCreatePathTracer()
+    if (pt) {
+      pt.reset()
+      btnGiStartPathTracer.textContent = 'Restart path tracer'
+    }
+  })
+}
+function applyGiEnvironment() {
+  scene.environmentIntensity = giParams.environmentIntensity
+  if (!scene.environmentRotation) scene.environmentRotation = new THREE.Euler(0, giParams.environmentRotation, 0)
+  else scene.environmentRotation.y = giParams.environmentRotation
+  if (pathTracer) pathTracer.updateEnvironment()
+}
+bindGiSlider('gi-envIntensity', 'gi-envIntensity-value', 'environmentIntensity', 0, 5, 0.1, applyGiEnvironment)
+bindGiSlider('gi-envRotation', 'gi-envRotation-value', 'environmentRotation', 0, 6.28, 0.01, applyGiEnvironment)
+const giEnvIntensityInput = document.getElementById('gi-envIntensity')
+if (giEnvIntensityInput) giParams.environmentIntensity = parseFloat(giEnvIntensityInput.value)
+const giEnvRotationInput = document.getElementById('gi-envRotation')
+if (giEnvRotationInput) giParams.environmentRotation = parseFloat(giEnvRotationInput.value)
+function applyGiBackground() {
+  if (!giGradientMap) return
+  giGradientMap.topColor.set(giParams.bgGradientTop)
+  giGradientMap.bottomColor.set(giParams.bgGradientBottom)
+  giGradientMap.update()
+  if (scene.background === giGradientMap) scene.backgroundBlurriness = giParams.backgroundBlur
+  if (pathTracer) pathTracer.updateEnvironment()
+}
+const giBgTop = document.getElementById('gi-bgTop')
+if (giBgTop) {
+  giBgTop.value = giParams.bgGradientTop
+  giBgTop.addEventListener('input', () => { giParams.bgGradientTop = giBgTop.value; applyGiBackground() })
+}
+const giBgBottom = document.getElementById('gi-bgBottom')
+if (giBgBottom) {
+  giBgBottom.value = giParams.bgGradientBottom
+  giBgBottom.addEventListener('input', () => { giParams.bgGradientBottom = giBgBottom.value; applyGiBackground() })
+}
+bindGiSlider('gi-bgBlur', 'gi-bgBlur-value', 'backgroundBlur', 0, 1, 0.01, () => {
+  scene.backgroundBlurriness = giParams.backgroundBlur
+  if (pathTracer) pathTracer.updateEnvironment()
+})
+
 applySkyParams()
 
 // --- Camera speed control ---
@@ -3581,36 +3847,42 @@ document.getElementById('point-light-color').addEventListener('input', (e) => {
   if (!selectedLight || selectedLight.type !== 'point') return
   selectedLight.light.color.set(e.target.value)
   updateLightHelperColor(selectedLight)
+  notifyPathTracerLightsChanged()
 })
 document.getElementById('point-light-intensity').addEventListener('input', (e) => {
   if (!selectedLight || selectedLight.type !== 'point') return
   const value = parseFloat(e.target.value)
   selectedLight.light.intensity = value
   document.getElementById('point-light-intensity-value').textContent = value
+  notifyPathTracerLightsChanged()
 })
 document.getElementById('point-light-radius').addEventListener('input', (e) => {
   if (!selectedLight || selectedLight.type !== 'point') return
   const value = parseFloat(e.target.value)
   selectedLight.light.distance = value
   document.getElementById('point-light-radius-value').textContent = value
+  notifyPathTracerLightsChanged()
 })
 
 document.getElementById('spot-light-color').addEventListener('input', (e) => {
   if (!selectedLight || selectedLight.type !== 'spot') return
   selectedLight.light.color.set(e.target.value)
   updateLightHelperColor(selectedLight)
+  notifyPathTracerLightsChanged()
 })
 document.getElementById('spot-light-intensity').addEventListener('input', (e) => {
   if (!selectedLight || selectedLight.type !== 'spot') return
   const value = parseFloat(e.target.value)
   selectedLight.light.intensity = value
   document.getElementById('spot-light-intensity-value').textContent = value
+  notifyPathTracerLightsChanged()
 })
 document.getElementById('spot-light-radius').addEventListener('input', (e) => {
   if (!selectedLight || selectedLight.type !== 'spot') return
   const value = parseFloat(e.target.value)
   selectedLight.light.distance = value
   document.getElementById('spot-light-radius-value').textContent = value
+  notifyPathTracerLightsChanged()
 })
 document.getElementById('spot-light-angle').addEventListener('input', (e) => {
   if (!selectedLight || selectedLight.type !== 'spot') return
@@ -3618,34 +3890,48 @@ document.getElementById('spot-light-angle').addEventListener('input', (e) => {
   selectedLight.light.angle = THREE.MathUtils.degToRad(value)
   document.getElementById('spot-light-angle-value').textContent = value
   updateSpotLightHelpers()
+  notifyPathTracerLightsChanged()
 })
 
 document.getElementById('ambient-light-color').addEventListener('input', (e) => {
   if (!selectedLight || selectedLight.type !== 'ambient') return
   selectedLight.light.color.set(e.target.value)
   updateLightHelperColor(selectedLight)
+  notifyPathTracerLightsChanged()
 })
 document.getElementById('ambient-light-intensity').addEventListener('input', (e) => {
   if (!selectedLight || selectedLight.type !== 'ambient') return
   const value = parseFloat(e.target.value)
   selectedLight.light.intensity = value
   document.getElementById('ambient-light-intensity-value').textContent = value
+  notifyPathTracerLightsChanged()
 })
 
 document.getElementById('directional-light-color').addEventListener('input', (e) => {
   if (!selectedLight || selectedLight.type !== 'directional') return
   selectedLight.light.color.set(e.target.value)
   updateLightHelperColor(selectedLight)
+  notifyPathTracerLightsChanged()
 })
 document.getElementById('directional-light-intensity').addEventListener('input', (e) => {
   if (!selectedLight || selectedLight.type !== 'directional') return
   const value = parseFloat(e.target.value)
   selectedLight.light.intensity = value
   document.getElementById('directional-light-intensity-value').textContent = value
+  notifyPathTracerLightsChanged()
 })
-document.getElementById('directional-light-dir-x').addEventListener('input', applyDirectionalDirectionFromInputs)
-document.getElementById('directional-light-dir-y').addEventListener('input', applyDirectionalDirectionFromInputs)
-document.getElementById('directional-light-dir-z').addEventListener('input', applyDirectionalDirectionFromInputs)
+document.getElementById('directional-light-dir-x').addEventListener('input', () => {
+  applyDirectionalDirectionFromInputs()
+  notifyPathTracerLightsChanged()
+})
+document.getElementById('directional-light-dir-y').addEventListener('input', () => {
+  applyDirectionalDirectionFromInputs()
+  notifyPathTracerLightsChanged()
+})
+document.getElementById('directional-light-dir-z').addEventListener('input', () => {
+  applyDirectionalDirectionFromInputs()
+  notifyPathTracerLightsChanged()
+})
 
 // --- Toolbar ---
 const entityPickerOverlay = document.getElementById('entity-picker-overlay')
@@ -3866,7 +4152,45 @@ function animate() {
   }
   if (editorMode === 'level-builder') updateHeaderRefreshButtonState()
   if (!webglContextLost && !renderer.getContext().isContextLost()) {
-    renderer.render(scene, camera)
+    const minSamplesForDisplay = giParams.minSamples
+    const indicatorEl = document.getElementById('gi-samples-indicator-value')
+    const panelSamplesEl = document.getElementById('gi-samples-value')
+    if (editorMode === 'skybox') {
+      const pt = getOrCreatePathTracer()
+      if (pt && giPathTracerStarted) {
+        camera.updateMatrixWorld()
+        if (!giPrevCameraMatrix.equals(camera.matrixWorld) || giCameraMatrixDirty) {
+          giPrevCameraMatrix.copy(camera.matrixWorld)
+          giCameraMatrixDirty = false
+          pt.updateCamera()
+        }
+        if (!giParams.pause || pt.samples < 1) pt.renderSample()
+        const s = String(pt.samples)
+        const minS = String(minSamplesForDisplay)
+        if (indicatorEl) indicatorEl.textContent = `${s} / ${minS}`
+        if (panelSamplesEl) panelSamplesEl.textContent = s
+      } else {
+        if (pt && !giPathTracerStarted) {
+          renderer.render(scene, camera)
+          if (indicatorEl) indicatorEl.textContent = `0 / ${minSamplesForDisplay}`
+          if (panelSamplesEl) panelSamplesEl.textContent = '—'
+        } else if (!pt) {
+          if (!window.__giFallbackToastShown) {
+            window.__giFallbackToastShown = true
+            if (typeof showToast === 'function') showToast('Path tracer unavailable; showing raster view.', { type: 'error' })
+          }
+          renderer.render(scene, camera)
+          if (indicatorEl) indicatorEl.textContent = 'Off'
+          if (panelSamplesEl) panelSamplesEl.textContent = 'Off'
+        }
+      }
+    } else {
+      window.__giFallbackToastShown = false
+      giCameraMatrixDirty = true
+      renderer.render(scene, camera)
+      if (indicatorEl) indicatorEl.textContent = '—'
+      if (panelSamplesEl) panelSamplesEl.textContent = '—'
+    }
   }
 }
 animate()

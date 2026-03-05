@@ -6,6 +6,9 @@ import { getTextureForImportedMesh, getRandomDarkTextureIndex } from './material
 /** Snap world position to this grid so shared edges get identical UVs. */
 const WORLD_UV_GRID = 1 / 512
 
+/** World units per texture tile when setting repeat on import so tiles stay visible from a distance. */
+const TILE_WORLD_UNITS = 50
+
 function snapToGrid(val, grid) {
   return Math.round(val / grid) * grid
 }
@@ -226,10 +229,19 @@ export function createImportSystem({
     return geom
   }
 
+  /** Preserve material when the mesh has any map (e.g. from GLB baseColorTexture). Loader may set .source or .image async. */
+  function hasValidTexture(mesh) {
+    const mat = mesh?.material
+    if (!mat) return false
+    const map = Array.isArray(mat) ? mat[0]?.map : mat.map
+    return !!map
+  }
+
   function addImportedMeshes(meshes, onSceneReady, importGroupName) {
     if (!meshes || meshes.length === 0) return
     pushUndoState()
     const groupName = importGroupName?.trim() || null
+    const _box3 = new THREE.Box3()
     const _size = new THREE.Vector3()
 
     const playerStartMeshes = meshes.filter((m) => m.userData?.type === 'player_start')
@@ -237,6 +249,51 @@ export function createImportSystem({
 
     for (const mesh of meshesToAdd) {
       if (!mesh.geometry?.attributes?.position) continue
+
+      if (hasValidTexture(mesh)) {
+        mesh.updateWorldMatrix(true, false)
+        const worldPos = new THREE.Vector3()
+        const worldQuat = new THREE.Quaternion()
+        const worldScale = new THREE.Vector3()
+        mesh.matrixWorld.decompose(worldPos, worldQuat, worldScale)
+        const clone = mesh.clone()
+        clone.position.copy(worldPos)
+        clone.quaternion.copy(worldQuat)
+        clone.scale.copy(worldScale)
+        clone.updateMatrixWorld(true)
+        _box3.setFromObject(clone)
+        _box3.getSize(_size)
+        const mat = clone.material
+        const map = Array.isArray(mat) ? mat[0]?.map : mat?.map
+        if (map?.repeat && _size.x > 0 && _size.y > 0 && _size.z > 0) {
+          const sorted = [Math.max(0.1, _size.x), Math.max(0.1, _size.y), Math.max(0.1, _size.z)].sort(
+            (a, b) => a - b
+          )
+          const repeatU = sorted[1]
+          const repeatV = sorted[2]
+          const aspect = map.image?.width && map.image?.height ? map.image.width / map.image.height : 1
+          const base =
+            Math.sqrt(repeatU * repeatV) / TILE_WORLD_UNITS
+          map.repeat.set(base * Math.sqrt(aspect), base / Math.sqrt(aspect))
+        }
+        clone.userData = {
+          isBrush: true,
+          type: 'imported',
+          importGroup: groupName ?? undefined,
+          id: crypto.randomUUID(),
+          isUserBrush: true,
+          textureIndex: mesh.userData?.textureIndex ?? null,
+        }
+        clone.castShadow = getUseLitMaterials()
+        clone.receiveShadow = getUseLitMaterials()
+        scene.add(clone)
+        brushes.push(clone)
+        mesh.geometry?.dispose?.()
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+        materials.forEach((m) => m?.dispose?.())
+        continue
+      }
+
       const geom = prepareGeometryForImportBaked(mesh)
       const merged = BufferGeometryUtils.mergeVertices(geom, MERGE_VERTICES_TOLERANCE)
       const geometry = merged || geom
@@ -257,7 +314,7 @@ export function createImportSystem({
         darkTex.image?.width && darkTex.image?.height
           ? darkTex.image.width / darkTex.image.height
           : 1
-      const baseRepeat = Math.sqrt(repeatU * repeatV)
+      const baseRepeat = Math.sqrt(repeatU * repeatV) / TILE_WORLD_UNITS
       if (darkTex.repeat) darkTex.repeat.set(baseRepeat * Math.sqrt(aspect), baseRepeat / Math.sqrt(aspect))
       const unlitMaterial = new THREE.MeshBasicMaterial({
         map: darkTex,

@@ -1,5 +1,6 @@
+import * as THREE from 'three'
 import { describe, it, expect } from 'vitest'
-import { buildObjectsToExport } from './export-glb.js'
+import { buildObjectsToExport, mergeBakedMeshes } from './export-glb.js'
 
 describe('buildObjectsToExport', () => {
   const getNull = () => null
@@ -89,5 +90,30 @@ describe('buildObjectsToExport', () => {
     )
     expect(out).not.toContain(brush)
     expect(out).toContain(resultMesh)
+  })
+})
+
+describe('mergeBakedMeshes', () => {
+  it('returns same array when 0 or 1 mesh', () => {
+    const light = {}
+    expect(mergeBakedMeshes([])).toEqual([])
+    expect(mergeBakedMeshes([light])).toEqual([light])
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial())
+    const one = mergeBakedMeshes([mesh])
+    expect(one).toHaveLength(1)
+    expect(one[0]).toBe(mesh)
+  })
+
+  it('merges multiple meshes into one and keeps non-meshes', () => {
+    const mesh1 = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial())
+    mesh1.position.set(0, 0, 0)
+    const mesh2 = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial())
+    mesh2.position.set(2, 0, 0)
+    const light = { isLight: true }
+    const out = mergeBakedMeshes([mesh1, mesh2, light])
+    expect(out).toHaveLength(2)
+    expect(out[0].isMesh).toBe(true)
+    expect(out[0].geometry.attributes.position.count).toBeGreaterThan(0)
+    expect(out[1]).toBe(light)
   })
 })

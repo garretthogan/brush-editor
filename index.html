@@ -8,6 +8,9 @@
   </head>
   <body class="tui">
     <div id="app">
+      <div id="gi-samples-indicator" class="gi-samples-indicator hidden" aria-live="polite" aria-atomic="true">
+        Samples: <span id="gi-samples-indicator-value">0 / 64</span>
+      </div>
       <div id="viewport">
       </div>
       <div id="floor-plan-tool-root" class="floor-plan-tool-root hidden"></div>
@@ -24,9 +27,7 @@
               <option value="level-builder">Level Builder</option>
               -->
               <option value="floor-plan">Floor Planner</option>
-              <!-- Global Illumination hidden for now
               <option value="skybox">Global Illumination</option>
-              -->
             </select>
             <button id="btn-header-add" class="tab" type="button" title="Add entity" aria-label="Add entity">+</button>
             <button id="btn-header-refresh" class="tab" type="button" title="Generate or iterate selected volume" aria-label="Generate or iterate selected level builder volume">↻</button>
@@ -368,53 +369,86 @@
           <div class="panel collapsible">
             <button class="panel-header" data-panel="skybox-settings">
               <span class="panel-chevron">▼</span>
-              Preview
+              Path Tracer
             </button>
             <div class="panel-content" id="panel-skybox-settings">
-              <div class="control-row">
-                <label for="sky-turbidity">Turbidity</label>
-                <input type="range" id="sky-turbidity" min="0" max="20" step="0.1" value="8.6" />
-                <span id="sky-turbidity-value">8.6</span>
+              <p class="hint" style="margin-top:0">GPU path tracing. Lighting from environment map; move camera to converge.</p>
+              <div class="control-row" id="gi-samples-row">
+                <span id="gi-samples-label">Samples</span>
+                <span id="gi-samples-value" aria-live="polite">—</span>
               </div>
               <div class="control-row">
-                <label for="sky-rayleigh">Rayleigh</label>
-                <input type="range" id="sky-rayleigh" min="0" max="4" step="0.001" value="4" />
-                <span id="sky-rayleigh-value">4</span>
+                <label for="gi-pause">Pause</label>
+                <input type="checkbox" id="gi-pause" aria-label="Pause path tracer" />
               </div>
               <div class="control-row">
-                <label for="sky-mie">Mie coefficient</label>
-                <input type="range" id="sky-mie" min="0" max="0.1" step="0.001" value="0.1" />
-                <span id="sky-mie-value">0.1</span>
+                <label for="gi-bounces">Bounces</label>
+                <input type="range" id="gi-bounces" min="1" max="20" step="1" value="8" />
+                <span id="gi-bounces-value">8</span>
               </div>
               <div class="control-row">
-                <label for="sky-mie-g">Mie directional G</label>
-                <input type="range" id="sky-mie-g" min="0" max="1" step="0.001" value="1" />
-                <span id="sky-mie-g-value">1</span>
+                <label for="gi-minSamples">Min samples</label>
+                <input type="range" id="gi-minSamples" min="16" max="256" step="16" value="64" aria-describedby="gi-minSamples-hint" />
+                <span id="gi-minSamples-value">64</span>
+              </div>
+              <p class="hint" id="gi-minSamples-hint" style="margin:0 0 0.5em 0">Higher = less grain on textures, longer wait after moving camera.</p>
+              <div class="control-row">
+                <label for="gi-filterGlossy">Filter glossy</label>
+                <input type="range" id="gi-filterGlossy" min="0" max="1" step="0.05" value="0.5" />
+                <span id="gi-filterGlossy-value">0.5</span>
               </div>
               <div class="control-row">
-                <label for="sky-elevation">Sun elevation (°)</label>
-                <input type="range" id="sky-elevation" min="0" max="90" step="0.1" value="0" />
-                <span id="sky-elevation-value">0</span>
+                <label for="gi-renderScale">Render scale</label>
+                <input type="range" id="gi-renderScale" min="0.1" max="1" step="0.05" value="1" />
+                <span id="gi-renderScale-value">1</span>
               </div>
               <div class="control-row">
-                <label for="sky-azimuth">Sun azimuth (°)</label>
-                <input type="range" id="sky-azimuth" min="-180" max="180" step="0.1" value="-11" />
-                <span id="sky-azimuth-value">-11</span>
+                <label for="gi-tiles">Tiles</label>
+                <input type="range" id="gi-tiles" min="1" max="6" step="1" value="2" />
+                <span id="gi-tiles-value">2</span>
+              </div>
+            </div>
+          </div>
+          <div class="panel collapsible">
+            <button class="panel-header" data-panel="gi-environment" aria-expanded="false" aria-controls="panel-gi-environment">
+              <span class="panel-chevron">▼</span>
+              Environment
+            </button>
+            <div class="panel-content" id="panel-gi-environment">
+              <div class="control-row">
+                <label for="gi-envMap">Map</label>
+                <select id="gi-envMap" aria-label="Environment map for lighting"></select>
               </div>
               <div class="control-row">
-                <label for="sky-exposure">Exposure</label>
-                <input type="range" id="sky-exposure" min="0" max="1" step="0.0001" value="0.5" />
-                <span id="sky-exposure-value">0.5</span>
-              </div>
-              <div class="tool-divider" role="separator"></div>
-              <div class="control-row">
-                <label for="sun-intensity">Sun intensity</label>
-                <input type="range" id="sun-intensity" min="0" max="50" step="0.05" value="3" />
-                <span id="sun-intensity-value">3</span>
+                <label for="gi-envIntensity">Intensity</label>
+                <input type="range" id="gi-envIntensity" min="0" max="5" step="0.1" value="1" />
+                <span id="gi-envIntensity-value">1</span>
               </div>
               <div class="control-row">
-                <label for="sun-color">Sun color</label>
-                <input type="color" id="sun-color" value="#ffffff" />
+                <label for="gi-envRotation">Rotation</label>
+                <input type="range" id="gi-envRotation" min="0" max="6.28" step="0.01" value="0" />
+                <span id="gi-envRotation-value">0</span>
+              </div>
+            </div>
+          </div>
+          <div class="panel collapsible">
+            <button class="panel-header" data-panel="gi-background" aria-expanded="false" aria-controls="panel-gi-background">
+              <span class="panel-chevron">▼</span>
+              Background
+            </button>
+            <div class="panel-content" id="panel-gi-background">
+              <div class="control-row">
+                <label for="gi-bgTop">Gradient top</label>
+                <input type="color" id="gi-bgTop" value="#111111" aria-label="Background gradient top" />
+              </div>
+              <div class="control-row">
+                <label for="gi-bgBottom">Gradient bottom</label>
+                <input type="color" id="gi-bgBottom" value="#000000" aria-label="Background gradient bottom" />
+              </div>
+              <div class="control-row">
+                <label for="gi-bgBlur">Blur</label>
+                <input type="range" id="gi-bgBlur" min="0" max="1" step="0.01" value="0" />
+                <span id="gi-bgBlur-value">0</span>
               </div>
             </div>
           </div>
@@ -541,6 +575,11 @@
             </div>
           </div>
         </div>
+        <div id="gi-path-tracer-start-wrapper" class="panel hidden">
+          <div class="panel-content">
+            <button type="button" id="btn-gi-start-path-tracer" aria-label="Start or restart path tracer to begin or reset convergence">Start path tracer</button>
+          </div>
+        </div>
         <div id="scene-list-panel" class="panel collapsible hidden">
           <button class="panel-header" data-panel="scene-list">
             <span class="panel-chevron">▼</span>
@@ -585,7 +624,7 @@
             <div id="export-list" class="export-list"></div>
             <label class="export-option">
               <input type="checkbox" id="export-bake-csg" checked />
-              <span>Bake CSG into one mesh (for use in other apps; uncheck to re-import into editor with all brushes)</span>
+              <span>Bake CSG into one mesh — keep checked so the level loads back as one piece; uncheck only if you need each brush as a separate mesh</span>
             </label>
           </div>
           <div class="modal-actions">
